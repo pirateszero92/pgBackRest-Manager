@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>pgBackRest Manager — User Manual (คู่มือสำหรับทีม Dev)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #090d16; color: #e2e8f0; font-family: Inter, system-ui, -apple-system, sans-serif; }
+    .shot { border-radius: 12px; border: 1px solid #334155; box-shadow: 0 12px 30px -10px rgba(0,0,0,0.7); }
+    code.inline { background: #1e293b; color: #7dd3fc; padding: 2px 6px; border-radius: 5px; font-size: 12px; }
+  </style>
+</head>
+<body class="p-4 md:p-6">
+  <div class="max-w-5xl mx-auto space-y-6 text-sm leading-relaxed">
+
+    <!-- Header -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-3">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 class="text-xl font-bold text-white">📖 คู่มือการใช้งาน pgBackRest Manager (สำหรับทีม Dev &amp; Ops)</h1>
+          <p class="text-xs text-slate-400 mt-1">URL: <code class="inline">http://10.1.1.211:8088</code> • เก็บ Backup บน MinIO S3 (<code class="inline">10.1.1.211:9000</code>)</p>
+        </div>
+        <span class="px-3 py-1 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-xs font-semibold">PostgreSQL 16 + Near-Realtime PITR</span>
+      </div>
+      <div class="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3.5 text-xs text-amber-200">
+        <strong>⚠️ กฎความปลอดภัยสำคัญ:</strong> เครื่อง <strong>PROD</strong> ทุกเครื่องถูกล็อก <code class="inline">allow_restore = false</code> ไว้ เพื่อป้องกันการกด Restore ทับ Production จากหน้าเว็บโดยไม่ได้ตั้งใจ หากต้องการ Restore ขึ้น Production จริง ให้ Copy คำสั่งจากหน้า Wizard ไปรันผ่าน CLI (หรือปลดล็อกชั่วคราวเฉพาะช่วง Maintenance)
+      </div>
+    </div>
+
+    <!-- Section 1: Stanzas & Backups -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+      <h2 class="text-base font-bold text-white flex items-center gap-2">📊 1. หน้า Stanzas &amp; Backups (ดูสถานะและสั่ง Backup)</h2>
+      <img src="/static/images/stanzas-overview.png" alt="Stanzas Overview" class="shot w-full" />
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs pt-2">
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2">
+          <div class="font-semibold text-sky-300">ความหมายของแต่ละคอลัมน์</div>
+          <ul class="space-y-1.5 text-slate-300 list-disc pl-4">
+            <li><strong>Status (<span class="text-emerald-400">ok</span>):</strong> เครื่อง DB เชื่อมต่อ MinIO และส่ง WAL ได้ปกติ</li>
+            <li><strong>Latest Backup:</strong> ชุด Backup ล่าสุด (<code class="inline">F</code> = Full, <code class="inline">D</code> = Diff)</li>
+            <li><strong>WAL Archive (Near-Realtime):</strong> แสดงเวลาล่าสุดที่ WAL ถูกส่งขึ้น MinIO (ส่งทุก ~60 วินาทีเมื่อมี transaction)</li>
+            <li><strong>Recoverable Window:</strong> ช่วงเวลา <code class="inline">เก่าสุด → ล่าสุด</code> ที่สามารถย้อนเวลากู้คืน (PITR) ได้</li>
+          </ul>
+        </div>
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2">
+          <div class="font-semibold text-indigo-300">ปุ่ม Actions ด้านขวา</div>
+          <ul class="space-y-1.5 text-slate-300 list-disc pl-4">
+            <li><span class="px-1.5 py-0.5 rounded bg-slate-800 text-white font-mono">Check</span> — ตรวจสุขภาพ pgBackRest &amp; MinIO (ไม่สร้างไฟล์ backup ใหม่)</li>
+            <li><span class="px-1.5 py-0.5 rounded bg-slate-800 text-white font-mono">Diff</span> — สั่งทำ <strong>Differential Backup</strong> ทันที (แนะนำให้กดก่อน Deploy หรือก่อนแก้ข้อมูลใหญ่)</li>
+            <li><span class="px-1.5 py-0.5 rounded bg-indigo-600 text-white font-mono">Full</span> — สั่งทำ <strong>Full Backup</strong> ทันที (ปกติระบบรันอัตโนมัติทุกวันอาทิตย์ 02:00 น.)</li>
+          </ul>
+        </div>
+      </div>
+      <div class="space-y-2">
+        <div class="text-xs font-semibold text-slate-300">ตัวอย่างหลังกด <code class="inline">Diff</code> — ดูผลลัพธ์แบบ Real-time ที่กล่อง Live Job Console ด้านล่าง:</div>
+        <img src="/static/images/live-job-console.png" alt="Live Job Console" class="shot w-full" />
+      </div>
+    </div>
+
+    <!-- Section 2: Playbook Deploy -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-3">
+      <h2 class="text-base font-bold text-white">🚀 2. ขั้นตอนสำหรับ Dev: ก่อน Deploy / รัน Script แก้ข้อมูล</h2>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-1">
+          <div class="text-indigo-400 font-bold">STEP 1: จดเวลาปัจจุบัน</div>
+          <p class="text-slate-300">ดูเวลาปัจจุบัน (เช่น <code class="inline">2026-11-19 16:05:00+07</code>) หรือดูเวลาใน <code class="inline">Recoverable Window</code> เผื่อต้องย้อนกลับ</p>
+        </div>
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-1">
+          <div class="text-indigo-400 font-bold">STEP 2: กดปุ่ม Check และ Diff</div>
+          <p class="text-slate-300">กดปุ่ม <code class="inline">Diff</code> ที่ Stanza ที่จะแก้ไข รอจน <code class="inline">Live Job Console</code> ขึ้น <code class="inline">exit code 0</code> (ใช้เวลาไม่กี่วินาที)</p>
+        </div>
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-1">
+          <div class="text-emerald-400 font-bold">STEP 3: Deploy / รัน Script</div>
+          <p class="text-slate-300">ดำเนินการตามปกติ หากเกิดปัญหาสามารถใช้ <code class="inline">PITR Restore Wizard</code> ย้อนกลับไปก่อน STEP 1 ได้ระดับวินาที</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 3: PITR Restore Wizard -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+      <h2 class="text-base font-bold text-white">⏪ 3. หน้า PITR Restore Wizard (การกู้คืนข้อมูลย้อนเวลา)</h2>
+      <!-- Visual Mockup of Restore Wizard -->
+      <div class="bg-slate-950 border border-slate-700 rounded-xl p-4 space-y-3 text-xs">
+        <div class="text-slate-400 font-semibold">ตัวอย่างหน้าจอ PITR Restore Wizard:</div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div class="p-3 rounded-lg bg-slate-900 border border-slate-800">
+            <div class="text-slate-400">1. Source Backup Stanza</div>
+            <div class="font-mono text-white mt-1">uat-test (10.1.1.203) ▾</div>
+          </div>
+          <div class="p-3 rounded-lg bg-slate-900 border border-slate-800">
+            <div class="text-slate-400">2. Target Server to Restore</div>
+            <div class="font-mono text-sky-300 mt-1">10.1.1.203 — test-backup (UAT) (Allowed) ▾</div>
+          </div>
+          <div class="p-3 rounded-lg bg-slate-900 border border-slate-800">
+            <div class="text-slate-400">3. Recovery Mode</div>
+            <div class="font-mono text-white mt-1">Point-in-Time (--type=time) ▾</div>
+          </div>
+          <div class="p-3 rounded-lg bg-slate-900 border border-slate-800">
+            <div class="text-slate-400">4. Target Timestamp (+07)</div>
+            <div class="font-mono text-emerald-300 mt-1">2026-11-19 16:04:50+07</div>
+            <div class="flex gap-1 mt-1.5"><span class="px-1.5 py-0.5 rounded bg-slate-800">-1m</span><span class="px-1.5 py-0.5 rounded bg-slate-800">-5m</span><span class="px-1.5 py-0.5 rounded bg-slate-800">-15m</span><span class="px-1.5 py-0.5 rounded bg-slate-800">-1h</span></div>
+          </div>
+        </div>
+        <div class="p-3 rounded-lg bg-slate-900 border border-slate-800 font-mono text-indigo-300">
+          Command Preview: pgbackrest --stanza=uat-test --delta --type=time --target="2026-11-19 16:04:50+07" --target-timeline=latest --target-action=promote restore
+        </div>
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div>Type stanza name to confirm: <span class="px-2 py-1 rounded bg-slate-900 border border-slate-700 font-mono text-white">uat-test</span></div>
+          <span class="px-3 py-1.5 rounded-lg bg-amber-600 text-white font-semibold">⏪ Start PITR Restore</span>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-1.5">
+          <div class="font-semibold text-emerald-300">กรณี Restore บน UAT (ทำผ่านหน้าเว็บได้เลย)</div>
+          <ol class="list-decimal pl-4 space-y-1 text-slate-300">
+            <li>เลือก <strong>Source Stanza</strong> และ <strong>Target Server</strong> (UAT)</li>
+            <li>เลือก Mode <code class="inline">Point-in-Time</code> แล้วระบุเวลา <strong>ก่อนเกิดเหตุ</strong></li>
+            <li>พิมพ์ชื่อ stanza เพื่อยืนยัน แล้วกด <strong>Start PITR Restore</strong></li>
+            <li>ระบบจะ Stop Postgres → Restore → Start &amp; Promote ให้อัตโนมัติ</li>
+          </ol>
+        </div>
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-1.5">
+          <div class="font-semibold text-rose-300">กรณี Restore เครื่อง Production (CLI เพื่อความปลอดภัย)</div>
+          <ol class="list-decimal pl-4 space-y-1 text-slate-300">
+            <li>เลือก Source เป็น Stanza ของ PROD และตั้งเวลาที่ต้องการ</li>
+            <li>Copy คำสั่งจากช่อง <strong>Command Preview</strong></li>
+            <li>SSH เข้าเครื่อง Production แล้วรันตามลำดับ:
+              <pre class="mt-1 p-2 rounded bg-slate-900 text-[11px] font-mono text-sky-300 overflow-x-auto">sudo systemctl stop postgresql@16-main
+sudo -u postgres &lt;คำสั่งที่ copy มา&gt;
+sudo systemctl start postgresql@16-main</pre>
+            </li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 4: DB Servers & Logs -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+      <h2 class="text-base font-bold text-white">🖥️ 4. หน้า DB Servers, Schedules &amp; Activity Logs</h2>
+      <img src="/static/images/db-servers.png" alt="DB Servers" class="shot w-full" />
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-1">
+          <div class="font-semibold text-sky-300">DB Servers</div>
+          <p class="text-slate-300">กด <strong>Edit</strong> เพื่อดึงข้อมูลลงฟอร์มล่าง (แก้ <code class="inline">Allow Restore Target</code> โดยไม่ต้องกรอกรหัสซ้ำ) กด <strong>Test SSH</strong> เพื่อเช็กการเชื่อมต่อ</p>
+        </div>
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-1">
+          <div class="font-semibold text-amber-300">Schedules &amp; Cron</div>
+          <p class="text-slate-300">เช็กตารางเวลา Backup อัตโนมัติของ <code class="inline">postgres</code> ทุกเครื่อง (Full อาทิตย์ 02:00 / Diff จ–ส 02:00)</p>
+        </div>
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-1">
+          <div class="font-semibold text-emerald-300">Activity &amp; Logs</div>
+          <p class="text-slate-300">ดูประวัติการกด Backup/Restore ย้อนหลัง พร้อมปุ่ม <strong>Fetch Server Log</strong> ดึง <code class="inline">/var/log/pgbackrest/*.log</code> จากเครื่อง DB</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 5: Disaster Recovery (OS Crash / VM Restore) -->
+    <div class="bg-slate-900 border border-rose-500/30 rounded-2xl p-6 space-y-4">
+      <h2 class="text-base font-bold text-white">🚨 5. Disaster Recovery: กรณี OS พังแล้ว Restore VM กลับมาจาก Backup</h2>
+      <p class="text-xs text-slate-300">
+        หาก OS พังแล้วกู้คืน VM/OS Backup (เช่น Proxmox/Veeam) กลับมา ข้อมูล PostgreSQL ใน VM นั้นจะเป็นข้อมูลเก่า ณ เวลาที่ Backup VM ไว้ — ให้ทำตามขั้นตอนนี้เพื่อดึงข้อมูลล่าสุด (รวมถึง WAL Archive ก่อนเครื่องพัง) จาก MinIO (<code class="inline">10.1.1.211:9000</code>) กลับมาให้ทันปัจจุบันที่สุด:
+      </p>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2">
+          <div class="font-semibold text-amber-300">กรณี A: Restore VM Backup เดิมกลับมา (มี pgBackRest อยู่แล้ว)</div>
+          <ol class="list-decimal pl-4 space-y-1.5 text-slate-300">
+            <li>หยุด PostgreSQL บนเครื่องที่เพิ่งกู้คืน VM กลับมา:
+              <pre class="mt-1 p-2 rounded bg-slate-900 font-mono text-[11px] text-sky-300 overflow-x-auto">sudo systemctl stop postgresql@16-main</pre>
+            </li>
+            <li>สั่ง Restore ข้อมูลล่าสุดจาก MinIO แบบ <code class="inline">--delta</code> (เปลี่ยน <code class="inline">&lt;STANZA&gt;</code> เช่น <code class="inline">wms-prod</code>, <code class="inline">tms-prod</code>, <code class="inline">interface-prod</code>, <code class="inline">spp-prod</code>, <code class="inline">service-prod</code>):
+              <pre class="mt-1 p-2 rounded bg-slate-900 font-mono text-[11px] text-emerald-300 overflow-x-auto">sudo -u postgres pgbackrest --stanza=&lt;STANZA&gt; --delta --type=default --target-timeline=latest --target-action=promote restore</pre>
+            </li>
+            <li>สตาร์ท PostgreSQL กลับมาและเช็กว่าพร้อมเขียนแล้ว (<code class="inline">f</code>):
+              <pre class="mt-1 p-2 rounded bg-slate-900 font-mono text-[11px] text-sky-300 overflow-x-auto">sudo systemctl start postgresql@16-main
+sudo -u postgres psql -tAc "SELECT pg_is_in_recovery();"</pre>
+            </li>
+          </ol>
+        </div>
+
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2">
+          <div class="font-semibold text-rose-300">กรณี B: ลง OS + PostgreSQL 16 ใหม่ทั้งหมด (เครื่องเปล่า)</div>
+          <ol class="list-decimal pl-4 space-y-1.5 text-slate-300">
+            <li>ติดตั้ง Ubuntu + PostgreSQL 16 และติดตั้ง <code class="inline">pgbackrest</code> (2.60+ จาก PGDG Repo)</li>
+            <li>สร้าง <code class="inline">/etc/pgbackrest.conf</code> (ชี้ MinIO <code class="inline">10.1.1.211:9000</code> และใส่ <code class="inline">[&lt;STANZA&gt;]</code> เดิม) และตั้งค่า <code class="inline">/etc/postgresql/16/main/conf.d/99-pitr.conf</code></li>
+            <li>หยุด PostgreSQL → รันคำสั่ง <code class="inline">restore</code> แบบเดียวกับกรณี A ข้อ 2 → สตาร์ท PostgreSQL กลับมา</li>
+          </ol>
+          <div class="mt-2 p-2.5 rounded-lg bg-indigo-500/10 border border-indigo-500/30 text-[11px] text-indigo-200">
+            <strong>💡 Tip:</strong> หลังกู้คืนเสร็จแล้ว แนะนำให้เช็กหน้า <strong>Stanzas &amp; Backups</strong> และกดปุ่ม <code class="inline">Check</code> 1 ครั้ง เพื่อให้แน่ใจว่าเครื่องกลับมาส่ง WAL ขึ้น MinIO ต่อได้ตามปกติ (หากเป็นเครื่องที่มี Replica ให้ตรวจสอบ <code class="inline">pg_stat_replication</code> ด้วย)
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 6: Fresh Install + Config Reference for All 5 Production Servers -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5">
+      <div>
+        <h2 class="text-base font-bold text-white">🛠️ 6. ขั้นตอนติดตั้ง pgBackRest บนเครื่องใหม่ + Configuration ของทั้ง 5 Production Servers</h2>
+        <p class="text-xs text-slate-400 mt-1">เก็บไว้ใช้กรณีติดตั้งเครื่องใหม่ หรือ Reinstall OS + PostgreSQL 16 (Ubuntu 22.04 / 24.04)</p>
+      </div>
+
+      <!-- Step by step install -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2">
+          <div class="font-semibold text-sky-300">Step 1: ติดตั้ง pgBackRest 2.60+ จาก PGDG Repo</div>
+          <p class="text-slate-400 text-[11px]">⚠️ ห้ามใช้แพ็กเกจเริ่มต้นของ Ubuntu 22.04 (v2.37) เพราะไม่รองรับ PostgreSQL 16</p>
+          <pre class="p-2.5 rounded bg-slate-900 font-mono text-[11px] text-slate-200 overflow-x-auto">sudo apt-get update
+sudo apt-get install -y curl ca-certificates gnupg lsb-release
+sudo install -d /usr/share/postgresql-common/pgdg
+sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+  https://www.postgresql.org/media/keys/ACCC4CF8.asc
+echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+  https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | \
+  sudo tee /etc/apt/sources.list.d/pgdg.list
+sudo apt-get update &amp;&amp; sudo apt-get install -y pgbackrest
+pgbackrest version</pre>
+        </div>
+
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2">
+          <div class="font-semibold text-emerald-300">Step 2–4: ตั้งสิทธิ์ไฟล์ + Restore หรือเริ่ม Stanza ใหม่</div>
+          <pre class="p-2.5 rounded bg-slate-900 font-mono text-[11px] text-slate-200 overflow-x-auto"># หลังวาง /etc/pgbackrest.conf และ 99-pitr.conf แล้ว:
+sudo chmod 640 /etc/pgbackrest.conf
+sudo chown root:postgres /etc/pgbackrest.conf
+
+# ▶ กรณี Restore ข้อมูลเดิมกลับเข้าเครื่องใหม่:
+sudo systemctl stop postgresql@16-main
+sudo -u postgres pgbackrest --stanza=&lt;STANZA&gt; --delta --type=default \
+  --target-timeline=latest --target-action=promote restore
+sudo systemctl start postgresql@16-main
+
+# ▶ กรณีสร้างเครื่องใหม่ (ยังไม่มี Backup ใน MinIO):
+sudo systemctl restart postgresql@16-main
+sudo -u postgres pgbackrest --stanza=&lt;STANZA&gt; stanza-create
+sudo -u postgres pgbackrest --stanza=&lt;STANZA&gt; check
+sudo -u postgres pgbackrest --stanza=&lt;STANZA&gt; --type=full backup</pre>
+        </div>
+      </div>
+
+      <!-- 5 Production Servers Table -->
+      <div class="overflow-x-auto border border-slate-800 rounded-xl text-xs">
+        <table class="w-full text-left">
+          <thead class="bg-slate-950 text-slate-400 border-b border-slate-800">
+            <tr>
+              <th class="px-3 py-2">Server Name</th>
+              <th class="px-3 py-2">IP</th>
+              <th class="px-3 py-2">Stanza</th>
+              <th class="px-3 py-2">wal_level</th>
+              <th class="px-3 py-2">pg1-path</th>
+              <th class="px-3 py-2">Cron (postgres)</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-800 bg-slate-950/40 font-mono text-[11px]">
+            <tr><td class="px-3 py-2 text-white">db-wms-production</td><td class="px-3 py-2 text-sky-300">10.1.1.9</td><td class="px-3 py-2 text-emerald-300">wms-prod</td><td class="px-3 py-2">replica</td><td class="px-3 py-2">/var/lib/postgresql/16/main</td><td class="px-3 py-2">0 2 * * 0 (Full) / 1-6 (Diff)</td></tr>
+            <tr><td class="px-3 py-2 text-white">db-tms-production</td><td class="px-3 py-2 text-sky-300">10.1.1.24</td><td class="px-3 py-2 text-emerald-300">tms-prod</td><td class="px-3 py-2">replica</td><td class="px-3 py-2">/var/lib/postgresql/16/main</td><td class="px-3 py-2">0 2 * * 0 (Full) / 1-6 (Diff)</td></tr>
+            <tr><td class="px-3 py-2 text-white">db-interface-production</td><td class="px-3 py-2 text-sky-300">10.1.1.165</td><td class="px-3 py-2 text-emerald-300">interface-prod</td><td class="px-3 py-2">replica</td><td class="px-3 py-2">/var/lib/postgresql/16/main</td><td class="px-3 py-2">0 2 * * 0 (Full) / 1-6 (Diff)</td></tr>
+            <tr><td class="px-3 py-2 text-white">db-spp-prod</td><td class="px-3 py-2 text-amber-300">10.1.1.8</td><td class="px-3 py-2 text-emerald-300">spp-prod</td><td class="px-3 py-2 text-amber-300">logical</td><td class="px-3 py-2">/var/lib/postgresql/16/main</td><td class="px-3 py-2">0 2 * * 0 (Full) / 1-6 (Diff)</td></tr>
+            <tr><td class="px-3 py-2 text-white">db-service-prod</td><td class="px-3 py-2 text-sky-300">10.1.1.42</td><td class="px-3 py-2 text-emerald-300">service-prod</td><td class="px-3 py-2">replica</td><td class="px-3 py-2">/var/lib/postgresql/16/main</td><td class="px-3 py-2">0 2 * * 0 (Full) / 1-6 (Diff)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Exact Config Blocks -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2">
+          <div class="font-semibold text-indigo-300">1) /etc/pgbackrest.conf (ใช้ [global] เหมือนกันทั้ง 5 เครื่อง)</div>
+          <pre class="p-2.5 rounded bg-slate-900 font-mono text-[11px] text-slate-200 overflow-x-auto">[global]
+repo1-type=s3
+repo1-path=/pgbackrest
+repo1-s3-bucket=pg-backups
+repo1-s3-endpoint=http://10.1.1.211:9000
+repo1-s3-region=us-east-1
+repo1-s3-uri-style=path
+repo1-s3-key=&lt;MINIO_ACCESS_KEY&gt;
+repo1-s3-key-secret=&lt;MINIO_SECRET_KEY&gt;
+repo1-storage-verify-tls=n
+repo1-retention-full=2
+repo1-retention-diff=7
+compress-type=zst
+process-max=2
+start-fast=y
+
+# เลือกใส่เฉพาะ Stanza ของเครื่องนั้น:
+[wms-prod]         # สำหรับ 10.1.1.9
+pg1-path=/var/lib/postgresql/16/main
+
+[tms-prod]         # สำหรับ 10.1.1.24
+pg1-path=/var/lib/postgresql/16/main
+
+[interface-prod]   # สำหรับ 10.1.1.165
+pg1-path=/var/lib/postgresql/16/main
+
+[spp-prod]         # สำหรับ 10.1.1.8
+pg1-path=/var/lib/postgresql/16/main
+
+[service-prod]     # สำหรับ 10.1.1.42
+pg1-path=/var/lib/postgresql/16/main</pre>
+        </div>
+
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2">
+          <div class="font-semibold text-amber-300">2) /etc/postgresql/16/main/conf.d/99-pitr.conf</div>
+          <pre class="p-2.5 rounded bg-slate-900 font-mono text-[11px] text-slate-200 overflow-x-auto"># --- สำหรับ wms-prod (10.1.1.9) ---
+wal_level = replica
+archive_mode = on
+archive_command = 'pgbackrest --stanza=wms-prod archive-push %p'
+archive_timeout = 60
+
+# --- สำหรับ tms-prod (10.1.1.24) ---
+wal_level = replica
+archive_mode = on
+archive_command = 'pgbackrest --stanza=tms-prod archive-push %p'
+archive_timeout = 60
+
+# --- สำหรับ interface-prod (10.1.1.165) ---
+wal_level = replica
+archive_mode = on
+archive_command = 'pgbackrest --stanza=interface-prod archive-push %p'
+archive_timeout = 60
+
+# --- สำหรับ spp-prod (10.1.1.8) ⚠️ ใช้ logical ---
+wal_level = logical
+archive_mode = on
+archive_command = 'pgbackrest --stanza=spp-prod archive-push %p'
+archive_timeout = 60
+
+# --- สำหรับ service-prod (10.1.1.42) ---
+wal_level = replica
+archive_mode = on
+archive_command = 'pgbackrest --stanza=service-prod archive-push %p'
+archive_timeout = 60</pre>
+        </div>
+      </div>
+    </div>
+
+  </div>
+  <script>
+    if (window.self !== window.top) {
+      document.body.style.padding = '0';
+      document.body.style.background = 'transparent';
+    }
+  </script>
+</body>
+</html>

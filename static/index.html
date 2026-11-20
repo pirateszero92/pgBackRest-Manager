@@ -1,0 +1,1775 @@
+<!DOCTYPE html>
+<html lang="th" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>pgBackRest PITR Manager</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 antialiased min-h-screen">
+  <!-- Login View -->
+  <div id="login-view" class="min-h-screen flex items-center justify-center p-4">
+    <div class="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5 shadow-xl">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center font-bold">PG</div>
+        <div>
+          <h1 class="font-semibold text-base">pgBackRest Manager</h1>
+          <p class="text-xs text-slate-400">10.1.1.211:8088 • MinIO PITR</p>
+        </div>
+      </div>
+      <form onsubmit="doLogin(event)" class="space-y-3 text-sm">
+        <div>
+          <label class="text-xs text-slate-400 block mb-1">Username</label>
+          <input id="login-user" type="text" value="admin" required class="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 focus:outline-none focus:border-indigo-500" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 block mb-1">Password</label>
+          <input id="login-pass" type="password" required placeholder="Password" class="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 focus:outline-none focus:border-indigo-500" />
+        </div>
+        <div id="login-error" class="hidden text-xs text-rose-400"></div>
+        <button type="submit" class="w-full py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 font-medium">Sign In</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- App View -->
+  <div id="app-view" class="hidden flex min-h-screen">
+    <aside class="w-64 bg-slate-900 border-r border-slate-800 p-4 flex flex-col justify-between shrink-0">
+      <div>
+        <div class="flex items-center gap-3 px-2 py-3 mb-4 border-b border-slate-800">
+          <div class="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-sm">PG</div>
+          <div>
+            <div class="font-semibold text-sm leading-tight">pgBackRest Manager</div>
+            <div class="text-xs text-slate-400">10.1.1.211:8088</div>
+          </div>
+        </div>
+        <nav class="space-y-1 text-sm">
+          <button onclick="switchTab('dashboard')" id="nav-dashboard" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg font-medium bg-indigo-600 text-white">
+            <span>📊</span><span>Stanzas & Backups</span>
+          </button>
+          <button onclick="switchTab('restore')" id="nav-restore" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg font-medium text-slate-400 hover:bg-slate-800 hover:text-white">
+            <span>⏪</span><span>PITR Restore Wizard</span>
+          </button>
+          <button onclick="switchTab('servers')" id="nav-servers" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg font-medium text-slate-400 hover:bg-slate-800 hover:text-white">
+            <span>🖥️</span><span>DB Servers</span>
+          </button>
+          <button onclick="switchTab('schedules')" id="nav-schedules" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg font-medium text-slate-400 hover:bg-slate-800 hover:text-white">
+            <span>🗓️</span><span>Schedules & Cron</span>
+          </button>
+          <button onclick="switchTab('logs')" id="nav-logs" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg font-medium text-slate-400 hover:bg-slate-800 hover:text-white">
+            <span>📜</span><span>Activity & Logs</span>
+          </button>
+          <button onclick="switchTab('architecture')" id="nav-architecture" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg font-medium text-slate-400 hover:bg-slate-800 hover:text-white">
+            <span>🗺️</span><span>System Architecture</span>
+          </button>
+          <button onclick="switchTab('manual')" id="nav-manual" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg font-medium text-slate-400 hover:bg-slate-800 hover:text-white">
+            <span>📖</span><span>User Manual</span>
+          </button>
+        </nav>
+      </div>
+
+      <div class="bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs space-y-2">
+        <div class="flex items-center justify-between">
+          <span class="font-medium">MinIO Storage</span>
+          <span class="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400">Online</span>
+        </div>
+        <div class="text-slate-400">Bucket: <span class="text-slate-200 font-mono">pg-backups</span></div>
+        <div class="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+          <div id="disk-bar" class="bg-indigo-500 h-2 rounded-full" style="width: 2%"></div>
+        </div>
+        <div class="flex justify-between text-slate-400">
+          <span id="disk-used">Used: —</span>
+          <span id="disk-free">Free: —</span>
+        </div>
+      </div>
+    </aside>
+
+    <main class="flex-1 p-6 space-y-6 overflow-y-auto">
+      <header class="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h1 id="page-title" class="text-xl font-semibold">Stanzas & Backups Overview</h1>
+          <p class="text-xs text-slate-400">PostgreSQL 16 PITR Management via pgBackRest & MinIO S3</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <div id="ws-status-pill" class="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-300" title="WebSocket Real-Time Stream">
+            <span id="ws-dot" class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+            <span id="ws-label">Connecting...</span>
+            <span id="last-updated-label" class="text-[10px] text-slate-400 font-mono ml-1"></span>
+            <button id="ws-pause-btn" onclick="toggleLivePause()" class="ml-1.5 px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px] text-slate-300" title="Pause/Resume live chart updates">Pause</button>
+          </div>
+          <button onclick="switchTab('architecture')" class="text-xs px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 hover:bg-slate-800 text-slate-200">🗺️ Architecture</button>
+          <button onclick="switchTab('manual')" class="text-xs px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 hover:bg-slate-800 text-slate-200">📖 Manual</button>
+          <button onclick="manualRefresh()" class="text-xs px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800">🔄 Refresh</button>
+          <button onclick="doLogout()" class="text-xs px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-300">Logout</button>
+        </div>
+      </header>
+
+      <!-- TAB 1: DASHBOARD -->
+      <section id="tab-dashboard" class="tab-panel space-y-5">
+        <div id="wal-alert-banner" class="hidden bg-amber-950/50 border border-amber-700/70 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div class="flex items-center gap-2.5">
+            <span class="text-base">⚠️</span>
+            <div>
+              <div class="font-semibold text-amber-300">WAL Archive Lag / Health Alert</div>
+              <div id="wal-alert-text" class="text-amber-200/90 font-mono text-[11px] mt-0.5"></div>
+            </div>
+          </div>
+          <button onclick="switchTab('logs')" class="px-2.5 py-1 rounded bg-amber-800/60 hover:bg-amber-700/60 text-amber-100 text-[11px] font-medium">View Alert Logs →</button>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <div class="text-xs text-slate-400">Configured Stanzas</div>
+            <div id="kpi-stanzas" class="text-2xl font-bold mt-1">—</div>
+          </div>
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <div class="text-xs text-slate-400">Healthy (ok)</div>
+            <div id="kpi-healthy" class="text-2xl font-bold mt-1 text-emerald-400">—</div>
+          </div>
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <div class="text-xs text-slate-400">Total Backup Sets</div>
+            <div id="kpi-backups" class="text-2xl font-bold mt-1">—</div>
+          </div>
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <div class="text-xs text-slate-400">MinIO Free Space</div>
+            <div id="kpi-free" class="text-2xl font-bold mt-1">—</div>
+          </div>
+        </div>
+
+        <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+          <div class="px-5 py-3.5 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
+            <div class="flex items-center gap-3">
+              <h2 class="font-semibold text-sm">Stanzas</h2>
+              <div class="flex items-center gap-1 text-[11px]">
+                <button onclick="setStanzaFilter('ALL')" id="flt-ALL" class="stanza-flt px-2 py-0.5 rounded bg-indigo-600 text-white">All</button>
+                <button onclick="setStanzaFilter('PROD')" id="flt-PROD" class="stanza-flt px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700">PROD</button>
+                <button onclick="setStanzaFilter('UAT')" id="flt-UAT" class="stanza-flt px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700">UAT</button>
+                <button onclick="setStanzaFilter('ALERT')" id="flt-ALERT" class="stanza-flt px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700">Alerts Only</button>
+              </div>
+            </div>
+            <span class="text-xs text-slate-400">Live data from pgBackRest --output=json</span>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs">
+              <thead class="bg-slate-950 text-slate-400 border-b border-slate-800">
+                <tr>
+                  <th class="px-4 py-3">Stanza</th>
+                  <th class="px-4 py-3">Host / Env</th>
+                  <th class="px-4 py-3">Status</th>
+                  <th class="px-4 py-3">Latest Backup</th>
+                  <th class="px-4 py-3">WAL Archive (Near-Realtime)</th>
+                  <th class="px-4 py-3">Recoverable Window</th>
+                  <th class="px-4 py-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="stanzas-tbody" class="divide-y divide-slate-800">
+                <tr><td colspan="7" class="px-4 py-6 text-center text-slate-400">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Real-Time Telemetry & Backup Timeline (HTML5 Canvas 2D) -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+          <div class="px-5 py-3 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3">
+            <div class="flex flex-wrap items-center gap-3">
+              <h2 class="font-semibold text-sm">Real-Time WAL &amp; Backup Analytics</h2>
+              <select id="chart-stanza-select" onchange="onChartStanzaChange()" class="text-xs px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 font-mono"></select>
+              <div class="flex items-center gap-1.5 text-[11px] text-slate-400 bg-slate-950 border border-slate-800 rounded-lg px-2 py-1">
+                <span>Alert &gt;</span>
+                <input id="alert-threshold-input" type="number" min="10" max="86400" value="120" class="w-14 bg-transparent text-amber-300 font-mono text-center focus:outline-none" />
+                <span>s</span>
+                <button onclick="saveAlertThreshold()" class="ml-1 px-1.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[10px]">Save</button>
+              </div>
+            </div>
+            <div class="flex flex-wrap items-center gap-3 text-[11px] text-slate-400">
+              <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-indigo-500 inline-block"></span>Full</span>
+              <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-sky-400 inline-block"></span>Diff</span>
+              <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-emerald-400 inline-block"></span>Incr</span>
+              <span class="flex items-center gap-1"><span class="w-2.5 h-1 bg-emerald-500/50 inline-block"></span>WAL Window</span>
+            </div>
+          </div>
+          <div class="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-slate-800">
+            <div class="p-4 space-y-2 relative">
+              <div class="flex items-center justify-between text-xs">
+                <span class="font-medium text-slate-300">WAL Archive Lag (seconds)</span>
+                <span id="wal-lag-badge" class="font-mono text-emerald-400">—</span>
+              </div>
+              <div class="relative bg-slate-950 border border-slate-800/80 rounded-lg overflow-hidden">
+                <canvas id="wal-lag-canvas" class="w-full h-52 block cursor-crosshair"></canvas>
+                <div id="wal-lag-tooltip" class="hidden pointer-events-none absolute z-10 px-2.5 py-1.5 rounded bg-slate-900/95 border border-slate-700 text-[11px] font-mono text-slate-200 shadow-lg"></div>
+              </div>
+            </div>
+            <div class="p-4 space-y-2 relative">
+              <div class="flex items-center justify-between text-xs">
+                <span class="font-medium text-slate-300">Backup Sets &amp; Recoverable Window</span>
+                <span class="text-[11px] text-slate-400">Click timeline to set PITR target</span>
+              </div>
+              <div class="relative bg-slate-950 border border-slate-800/80 rounded-lg overflow-hidden">
+                <canvas id="backup-timeline-canvas" class="w-full h-52 block cursor-crosshair"></canvas>
+                <div id="backup-timeline-tooltip" class="hidden pointer-events-none absolute z-10 px-2.5 py-1.5 rounded bg-slate-900/95 border border-slate-700 text-[11px] font-mono text-slate-200 shadow-lg"></div>
+              </div>
+            </div>
+          </div>
+          <div class="border-t border-slate-800 p-4 space-y-2 relative">
+            <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span class="font-medium text-slate-300">Daily Backup Size (Repo Size by Day)</span>
+              <div class="flex items-center gap-3 text-[11px] text-slate-400">
+                <span id="daily-backup-summary" class="font-mono text-slate-300">—</span>
+                <label class="flex items-center gap-1 cursor-pointer">
+                  <input id="daily-all-stanzas" type="checkbox" onchange="drawDailyBackupChart()" class="rounded" />
+                  <span>All Stanzas</span>
+                </label>
+              </div>
+            </div>
+            <div class="relative bg-slate-950 border border-slate-800/80 rounded-lg overflow-hidden">
+              <canvas id="daily-backup-canvas" class="w-full h-44 block cursor-crosshair"></canvas>
+              <div id="daily-backup-tooltip" class="hidden pointer-events-none absolute z-10 px-2.5 py-1.5 rounded bg-slate-900/95 border border-slate-700 text-[11px] font-mono text-slate-200 shadow-lg"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+          <div class="px-5 py-3 border-b border-slate-800 flex items-center justify-between">
+            <span class="font-semibold text-xs">Live Job Console <span class="text-slate-400 font-normal">(WebSocket Stream)</span></span>
+            <span id="job-status-badge" class="text-xs text-slate-400">Idle</span>
+          </div>
+          <pre id="job-console" class="p-4 text-xs font-mono text-slate-300 bg-slate-950 max-h-60 overflow-y-auto whitespace-pre-wrap">Ready.</pre>
+        </div>
+      </section>
+
+      <!-- TAB 2: PITR RESTORE -->
+      <section id="tab-restore" class="tab-panel hidden space-y-5">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-5">
+          <div class="flex items-start justify-between gap-4 border-b border-slate-800 pb-4">
+            <div>
+              <h2 class="font-semibold text-base">Point-in-Time Recovery (PITR) Wizard</h2>
+              <p class="text-xs text-slate-400 mt-0.5">กู้คืนฐานข้อมูลย้อนเวลา (เครื่อง Production ที่ตั้ง allow_restore=false จะถูกล็อกอัตโนมัติ)</p>
+            </div>
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+            <div>
+              <label class="font-medium block mb-1.5">1. Source Backup Stanza</label>
+              <select id="restore-source" onchange="updateRestorePreview()" class="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-sm"></select>
+            </div>
+            <div>
+              <label class="font-medium block mb-1.5">2. Target Server to Restore</label>
+              <select id="restore-target" onchange="updateRestorePreview()" class="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-sm"></select>
+            </div>
+            <div>
+              <label class="font-medium block mb-1.5">3. Recovery Mode</label>
+              <select id="restore-mode" onchange="updateRestorePreview()" class="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-sm">
+                <option value="time">Point-in-Time (--type=time)</option>
+                <option value="default">Latest Consistent (--type=default)</option>
+              </select>
+            </div>
+            <div>
+              <label class="font-medium block mb-1.5">4. Target Timestamp (+07)</label>
+              <input id="restore-time" type="text" oninput="updateRestorePreview()" class="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 font-mono text-sm" />
+              <div class="flex flex-wrap items-center gap-1.5 mt-2">
+                <span class="text-slate-400">Quick pick:</span>
+                <button type="button" onclick="setQuickTime(1)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700">-1m</button>
+                <button type="button" onclick="setQuickTime(5)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700">-5m</button>
+                <button type="button" onclick="setQuickTime(15)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700">-15m</button>
+                <button type="button" onclick="setQuickTime(60)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700">-1h</button>
+              </div>
+            </div>
+          </div>
+          <div id="restore-window-box" class="bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs flex flex-wrap items-center justify-between gap-2">
+            <span class="text-slate-400">Recoverable Window:</span>
+            <span id="restore-window-text" class="font-mono text-emerald-400">—</span>
+          </div>
+          <div class="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-2">
+            <div class="flex items-center justify-between text-[11px] text-slate-400">
+              <span>Interactive PITR Timeline Scrubber (คลิกหรือลากบนกราฟเพื่อเลือกเวลา Restore)</span>
+              <span class="font-mono text-amber-400">Amber line = Selected Target</span>
+            </div>
+            <div class="relative">
+              <canvas id="pitr-scrubber-canvas" class="w-full h-28 block cursor-crosshair"></canvas>
+              <div id="pitr-scrubber-tooltip" class="hidden pointer-events-none absolute z-10 px-2 py-1 rounded bg-slate-900/95 border border-slate-700 text-[11px] font-mono text-slate-200 shadow-lg"></div>
+            </div>
+          </div>
+          <div class="bg-slate-950 border border-slate-800 rounded-lg p-3.5 text-xs space-y-1.5">
+            <div class="font-medium text-slate-300">Command Preview:</div>
+            <pre id="restore-preview" class="block font-mono text-indigo-300 whitespace-pre-wrap break-all"></pre>
+          </div>
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="flex items-center gap-2 text-xs">
+              <span>Type stanza name to confirm:</span>
+              <input id="restore-confirm" type="text" placeholder="uat-test" class="px-2.5 py-1.5 rounded bg-slate-950 border border-slate-800 font-mono w-36" />
+            </div>
+            <button onclick="executeRestore()" class="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold">⏪ Start PITR Restore</button>
+          </div>
+          <pre id="restore-console" class="hidden p-4 text-xs font-mono text-slate-300 bg-slate-950 border border-slate-800 rounded-lg max-h-60 overflow-y-auto whitespace-pre-wrap"></pre>
+        </div>
+      </section>
+
+      <!-- TAB 3: SERVERS -->
+      <section id="tab-servers" class="tab-panel hidden space-y-5">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+          <h2 class="font-semibold text-sm">Registered DB Servers</h2>
+          <div id="servers-grid" class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs"></div>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+          <h2 class="font-semibold text-sm">Add / Update DB Server</h2>
+          <form onsubmit="addServer(event)" class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+            <input id="srv-id" required placeholder="ID (e.g. tms-prod)" class="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800" />
+            <input id="srv-name" required placeholder="Name (e.g. db-tms-prod)" class="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800" />
+            <input id="srv-host" required placeholder="IP (e.g. 10.1.1.24)" class="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800" />
+            <input id="srv-user" required value="ubuntu" placeholder="SSH User" class="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800" />
+            <input id="srv-pass" type="password" placeholder="SSH/Sudo Password (blank = keep existing)" class="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800" />
+            <input id="srv-stanza" required placeholder="Stanza (e.g. tms-prod)" class="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800" />
+            <select id="srv-env" class="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800">
+              <option value="UAT">UAT</option>
+              <option value="PROD">PROD</option>
+            </select>
+            <input id="srv-pgsvc" value="postgresql@16-main" placeholder="PG systemd service" class="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800" />
+            <label class="flex items-center gap-2 px-2"><input id="srv-allow" type="checkbox" /> Allow Restore Target</label>
+            <button type="submit" class="md:col-span-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 font-medium">Save Server</button>
+          </form>
+        </div>
+      </section>
+
+      <!-- TAB 4: SCHEDULES -->
+      <section id="tab-schedules" class="tab-panel hidden space-y-5">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4 text-xs">
+          <div class="flex items-center justify-between">
+            <h2 class="font-semibold text-sm">PostgreSQL Cron Schedules (postgres user)</h2>
+            <button onclick="loadSchedules()" class="px-3 py-1.5 rounded bg-slate-950 border border-slate-800">Reload Cron</button>
+          </div>
+          <div id="schedules-list" class="space-y-3"></div>
+        </div>
+      </section>
+
+      <!-- TAB 5: ACTIVITY & LOGS -->
+      <section id="tab-logs" class="tab-panel hidden space-y-5">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4 text-xs">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 class="font-semibold text-sm">UI Activity &amp; Job Logs (Persistent)</h2>
+              <p class="text-slate-400 text-[11px]">Recorded in <span class="font-mono">/app/data/logs.json</span> across restarts</p>
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+              <select id="log-filter-cat" onchange="loadLogs()" class="bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5">
+                <option value="ALL">All Categories</option>
+                <option value="ALERT">ALERT (WAL Lag)</option>
+                <option value="JOB">JOB (Check / Diff / Full)</option>
+                <option value="RESTORE">RESTORE</option>
+                <option value="SERVER">SERVER</option>
+                <option value="AUTH">AUTH</option>
+              </select>
+              <select id="log-filter-server" onchange="loadLogs()" class="bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5">
+                <option value="ALL">All Servers</option>
+              </select>
+              <select id="log-page-size" onchange="onLogPageSizeChange()" class="bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5" title="Rows per page">
+                <option value="25">25 / page</option>
+                <option value="50" selected>50 / page</option>
+                <option value="100">100 / page</option>
+              </select>
+              <button onclick="loadLogs()" class="px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-medium">Refresh Logs</button>
+            </div>
+          </div>
+
+          <div class="overflow-x-auto border border-slate-800 rounded-lg">
+            <table class="w-full text-left">
+              <thead class="text-slate-400 border-b border-slate-800 bg-slate-950/60">
+                <tr>
+                  <th class="px-3 py-2">Timestamp</th>
+                  <th class="px-3 py-2">Category</th>
+                  <th class="px-3 py-2">Action</th>
+                  <th class="px-3 py-2">Detail</th>
+                  <th class="px-3 py-2">Status</th>
+                  <th class="px-3 py-2">Duration</th>
+                  <th class="px-3 py-2 text-right">Output</th>
+                </tr>
+              </thead>
+              <tbody id="logs-tbody" class="divide-y divide-slate-800"></tbody>
+            </table>
+          </div>
+
+          <div id="logs-pagination" class="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
+            <span id="logs-page-info">—</span>
+            <div class="flex items-center gap-1.5">
+              <button id="logs-prev-btn" onclick="changeLogPage(-1)" class="px-2.5 py-1 rounded bg-slate-950 border border-slate-800 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed">« Prev</button>
+              <span id="logs-page-num" class="px-2 font-mono text-slate-300">Page 1 / 1</span>
+              <button id="logs-next-btn" onclick="changeLogPage(1)" class="px-2.5 py-1 rounded bg-slate-950 border border-slate-800 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed">Next »</button>
+            </div>
+          </div>
+
+          <div id="log-output-box" class="hidden space-y-1.5">
+            <div class="flex items-center justify-between text-[11px] text-slate-400">
+              <span id="log-output-title" class="font-semibold text-slate-200">Command Output</span>
+              <button onclick="document.getElementById('log-output-box').classList.add('hidden')" class="text-slate-400 hover:text-white">Close</button>
+            </div>
+            <pre id="log-output-pre" class="bg-slate-950 border border-slate-800 rounded-lg p-3 font-mono text-[11px] text-slate-300 max-h-60 overflow-y-auto whitespace-pre-wrap"></pre>
+          </div>
+        </div>
+
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4 text-xs">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 class="font-semibold text-sm">Remote Server pgBackRest Logs (<span class="font-mono">/var/log/pgbackrest/*.log</span>)</h2>
+              <p class="text-slate-400 text-[11px]">Inspect cron &amp; WAL archive logs directly from a DB host</p>
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+              <select id="remote-log-server" class="bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5"></select>
+              <select id="remote-log-lines" class="bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5">
+                <option value="100">Last 100 lines</option>
+                <option value="200">Last 200 lines</option>
+                <option value="400">Last 400 lines</option>
+              </select>
+              <button onclick="loadRemoteLog()" class="px-3 py-1.5 rounded bg-slate-950 border border-slate-700 hover:border-indigo-500 font-medium">Fetch Server Log</button>
+            </div>
+          </div>
+          <pre id="remote-log-pre" class="bg-slate-950 border border-slate-800 rounded-lg p-3 font-mono text-[11px] text-slate-300 max-h-80 overflow-y-auto whitespace-pre-wrap">Select a server and click "Fetch Server Log".</pre>
+        </div>
+      </section>
+
+      <!-- TAB 6: SYSTEM ARCHITECTURE -->
+      <section id="tab-architecture" class="tab-panel hidden space-y-2">
+        <div class="flex items-center justify-between text-xs text-slate-400">
+          <span>Interactive Production Architecture Diagram (Hover เพื่อดู Balloon Tooltip ของแต่ละเครื่อง)</span>
+          <a href="/static/architecture.html" target="_blank" class="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 hover:border-indigo-500 text-slate-200 font-medium">Open Fullscreen ↗</a>
+        </div>
+        <iframe id="arch-frame" src="/static/architecture.html" scrolling="no" onload="resizeArchFrame(this)" class="w-full border-0 bg-transparent overflow-hidden" style="height: 920px;"></iframe>
+      </section>
+
+      <!-- TAB 7: USER MANUAL -->
+      <section id="tab-manual" class="tab-panel hidden space-y-2">
+        <div class="flex items-center justify-between text-xs text-slate-400">
+          <span>คู่มือการใช้งาน pgBackRest Manager สำหรับทีม Dev &amp; Ops</span>
+          <a href="/static/manual.html" target="_blank" class="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 hover:border-indigo-500 text-slate-200 font-medium">Open in New Tab ↗</a>
+        </div>
+        <iframe id="manual-frame" src="/static/manual.html" scrolling="no" onload="resizeArchFrame(this)" class="w-full border-0 bg-transparent overflow-hidden" style="height: 1600px;"></iframe>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="hidden fixed bottom-5 right-5 px-4 py-2.5 rounded-lg bg-indigo-600 text-white text-xs font-medium shadow-lg"></div>
+
+  <script>
+    let token = localStorage.getItem('pgbr_token') || '';
+    let serversCache = [];
+    let stanzasCache = [];
+    let telemetryCache = {};
+    let pollIntervalSec = 8;
+    let alertThresholdSec = 120;
+    let livePaused = false;
+    let stanzaFilter = 'ALL';
+    let ws = null;
+    let wsReconnectTimer = null;
+    let wsPingTimer = null;
+    let wsBackoffMs = 1000;
+    const activeJobTargets = {}; // job_id -> { consoleId, badgeId }
+
+    function toggleLivePause() {
+      livePaused = !livePaused;
+      const btn = document.getElementById('ws-pause-btn');
+      if (btn) btn.textContent = livePaused ? 'Resume' : 'Pause';
+      if (livePaused) {
+        setWsState('connecting', 'PAUSED');
+      } else {
+        setWsState('live', `LIVE (WS • ${pollIntervalSec}s)`);
+        requestAnimationFrame(() => {
+          drawWalLagChart();
+          drawDashboardTimeline();
+          drawDailyBackupChart();
+        });
+      }
+    }
+
+    async function saveAlertThreshold() {
+      const inp = document.getElementById('alert-threshold-input');
+      const val = Math.max(10, Math.min(86400, parseInt(inp?.value || '120', 10) || 120));
+      try {
+        const res = await api('/api/alerts/config', {
+          method: 'POST',
+          body: JSON.stringify({ wal_lag_threshold_sec: val, enabled: true }),
+        });
+        alertThresholdSec = res.wal_lag_threshold_sec;
+        if (inp) inp.value = String(alertThresholdSec);
+        showToast(`WAL lag alert threshold set to ${alertThresholdSec}s`);
+        renderStanzas(stanzasCache);
+        renderAlertBanner(stanzasCache);
+        drawWalLagChart();
+      } catch (e) {
+        showToast(e.message);
+      }
+    }
+
+    function setStanzaFilter(flt) {
+      stanzaFilter = flt;
+      document.querySelectorAll('.stanza-flt').forEach(btn => {
+        btn.classList.remove('bg-indigo-600', 'text-white');
+        btn.classList.add('bg-slate-800', 'text-slate-300');
+      });
+      const active = document.getElementById('flt-' + flt);
+      if (active) {
+        active.classList.add('bg-indigo-600', 'text-white');
+        active.classList.remove('bg-slate-800', 'text-slate-300');
+      }
+      renderStanzas(stanzasCache);
+    }
+
+    function setWsState(state, text) {
+      const dot = document.getElementById('ws-dot');
+      const label = document.getElementById('ws-label');
+      if (!dot || !label) return;
+      dot.className = 'w-2 h-2 rounded-full ' + (
+        state === 'live' ? 'bg-emerald-400 animate-pulse' :
+        state === 'connecting' ? 'bg-amber-400 animate-pulse' : 'bg-rose-400'
+      );
+      label.textContent = text;
+    }
+
+    function closeWS() {
+      if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+      if (wsPingTimer) { clearInterval(wsPingTimer); wsPingTimer = null; }
+      if (ws) {
+        ws.onclose = null;
+        ws.onerror = null;
+        ws.onmessage = null;
+        ws.close();
+        ws = null;
+      }
+    }
+
+    function connectWS() {
+      if (!token) return;
+      closeWS();
+      setWsState('connecting', 'Connecting...');
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const sock = new WebSocket(`${proto}//${location.host}/ws?token=${encodeURIComponent(token)}`);
+      ws = sock;
+
+      sock.onopen = () => {
+        wsBackoffMs = 1000;
+        setWsState('live', `LIVE (WS • ${pollIntervalSec}s)`);
+        wsPingTimer = setInterval(() => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping' }));
+          }
+        }, 25000);
+      };
+
+      sock.onmessage = (ev) => {
+        let msg;
+        try { msg = JSON.parse(ev.data); } catch { return; }
+        if (msg.type === 'state_update') {
+          if (msg.poll_interval_sec) {
+            pollIntervalSec = msg.poll_interval_sec;
+            if (!livePaused) setWsState('live', `LIVE (WS • ${pollIntervalSec}s)`);
+          }
+          if (msg.alert_config && msg.alert_config.wal_lag_threshold_sec) {
+            alertThresholdSec = msg.alert_config.wal_lag_threshold_sec;
+            const inp = document.getElementById('alert-threshold-input');
+            if (inp && document.activeElement !== inp) inp.value = String(alertThresholdSec);
+          }
+          if (Array.isArray(msg.new_alerts) && msg.new_alerts.length) {
+            const first = msg.new_alerts[0];
+            showToast(`⚠️ WAL Lag Alert: ${first.stanza} (${first.lag_sec}s > ${first.threshold_sec}s)`);
+          }
+          if (!livePaused) {
+            applyStateUpdate(msg.storage, msg.stanzas, msg.telemetry, msg.updated_at);
+          }
+        } else if (msg.type === 'job_log') {
+          handleJobLogEvent(msg);
+        } else if (msg.type === 'job_status') {
+          handleJobStatusEvent(msg);
+        } else if (msg.type === 'job_snapshot') {
+          handleJobSnapshotEvent(msg);
+        }
+      };
+
+      sock.onclose = (ev) => {
+        if (wsPingTimer) { clearInterval(wsPingTimer); wsPingTimer = null; }
+        if (ev.code === 4401) {
+          setWsState('error', 'Session Expired');
+          return;
+        }
+        if (!token) return;
+        setWsState('connecting', `Reconnecting (${Math.round(wsBackoffMs / 1000)}s)...`);
+        wsReconnectTimer = setTimeout(connectWS, wsBackoffMs);
+        wsBackoffMs = Math.min(wsBackoffMs * 2, 10000);
+      };
+
+      sock.onerror = () => {
+        setWsState('error', 'WS Error');
+      };
+    }
+
+    function manualRefresh() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'refresh' }));
+        showToast('Refreshing via WebSocket...');
+      } else {
+        loadAll().catch(e => showToast(e.message));
+      }
+    }
+
+    function fmtBytes(b) {
+      if (!b && b !== 0) return '—';
+      if (b >= 1024 ** 3) return (b / 1024 ** 3).toFixed(2) + ' GB';
+      if (b >= 1024 ** 2) return (b / 1024 ** 2).toFixed(1) + ' MB';
+      return (b / 1024).toFixed(0) + ' KB';
+    }
+
+    function fmtBkkTime(epochSec) {
+      if (!epochSec && epochSec !== 0) return '—';
+      return new Date((epochSec + 7 * 3600) * 1000).toISOString().slice(0, 19).replace('T', ' ') + '+07';
+    }
+
+    function fmtBkkShort(epochSec) {
+      if (!epochSec && epochSec !== 0) return '';
+      return new Date((epochSec + 7 * 3600) * 1000).toISOString().slice(11, 19);
+    }
+
+    function parseBkkTime(str) {
+      if (!str) return null;
+      const m = str.trim().match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/);
+      if (!m) return null;
+      const ms = Date.parse(`${m[1]}T${m[2]}+07:00`);
+      return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
+    }
+
+    function showToast(msg) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.remove('hidden');
+      setTimeout(() => t.classList.add('hidden'), 3000);
+    }
+
+    async function api(path, opts = {}) {
+      const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+      if (token) headers['X-Auth-Token'] = token;
+      const res = await fetch(path, { ...opts, headers });
+      if (res.status === 401) {
+        token = '';
+        localStorage.removeItem('pgbr_token');
+        closeWS();
+        document.getElementById('app-view').classList.add('hidden');
+        document.getElementById('login-view').classList.remove('hidden');
+        throw new Error('Unauthorized');
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || 'Request failed');
+      }
+      return res.json();
+    }
+
+    async function doLogin(e) {
+      e.preventDefault();
+      const errEl = document.getElementById('login-error');
+      errEl.classList.add('hidden');
+      try {
+        const data = await api('/api/login', {
+          method: 'POST',
+          body: JSON.stringify({
+            username: document.getElementById('login-user').value,
+            password: document.getElementById('login-pass').value,
+          }),
+        });
+        token = data.token;
+        localStorage.setItem('pgbr_token', token);
+        document.getElementById('login-view').classList.add('hidden');
+        document.getElementById('app-view').classList.remove('hidden');
+        connectWS();
+        await loadAll();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    }
+
+    async function doLogout() {
+      closeWS();
+      await api('/api/logout', { method: 'POST' }).catch(() => {});
+      token = '';
+      localStorage.removeItem('pgbr_token');
+      location.reload();
+    }
+
+    function switchTab(tab) {
+      const titles = {
+        dashboard: 'Stanzas & Backups Overview',
+        restore: 'Point-in-Time Recovery (PITR) Wizard',
+        servers: 'Registered PostgreSQL Servers',
+        schedules: 'Backup Schedules & Cron',
+        logs: 'Activity & Job Logs',
+        architecture: 'SPP System Architecture — Production',
+        manual: 'pgBackRest Manager — User Manual'
+      };
+      document.querySelectorAll('.tab-panel').forEach(el => el.classList.add('hidden'));
+      document.getElementById('tab-' + tab).classList.remove('hidden');
+      document.getElementById('page-title').textContent = titles[tab];
+      document.querySelectorAll('.nav-btn').forEach(btn => {
+        btn.classList.remove('bg-indigo-600', 'text-white');
+        btn.classList.add('text-slate-400');
+      });
+      const active = document.getElementById('nav-' + tab);
+      active.classList.add('bg-indigo-600', 'text-white');
+      active.classList.remove('text-slate-400');
+      if (tab === 'dashboard') {
+        requestAnimationFrame(() => { drawWalLagChart(); drawDashboardTimeline(); drawDailyBackupChart(); });
+      }
+      if (tab === 'restore') {
+        requestAnimationFrame(() => drawPitrScrubber());
+      }
+      if (tab === 'schedules') loadSchedules();
+      if (tab === 'logs') loadLogs();
+      if (tab === 'architecture') {
+        const f = document.getElementById('arch-frame');
+        if (f) resizeArchFrame(f);
+      }
+      if (tab === 'manual') {
+        const f = document.getElementById('manual-frame');
+        if (f) resizeArchFrame(f);
+      }
+    }
+
+    function resizeArchFrame(f) {
+      try {
+        const h = f.contentWindow?.document?.documentElement?.scrollHeight;
+        if (h && h > 400) f.style.height = (h + 12) + 'px';
+      } catch (_) {}
+    }
+
+    function renderAlertBanner(stanzas) {
+      const banner = document.getElementById('wal-alert-banner');
+      const txt = document.getElementById('wal-alert-text');
+      if (!banner || !txt) return;
+      const issues = (stanzas || []).filter(s =>
+        s.status !== 'ok' ||
+        (s.archive_failed_count || 0) > 0 ||
+        (s.archive_lag_sec !== null && s.archive_lag_sec !== undefined && s.archive_lag_sec > alertThresholdSec)
+      );
+      if (!issues.length) {
+        banner.classList.add('hidden');
+        return;
+      }
+      txt.textContent = issues.map(s => {
+        const parts = [];
+        if (s.status !== 'ok') parts.push(`status=${s.status}`);
+        if (s.archive_lag_sec !== null && s.archive_lag_sec !== undefined && s.archive_lag_sec > alertThresholdSec) {
+          parts.push(`lag=${s.archive_lag_sec}s > ${alertThresholdSec}s`);
+        }
+        if ((s.archive_failed_count || 0) > 0) parts.push(`failed=${s.archive_failed_count}`);
+        return `${s.stanza} (${parts.join(', ')})`;
+      }).join('  •  ');
+      banner.classList.remove('hidden');
+    }
+
+    function applyStateUpdate(storage, stanzas, telemetry, updatedAt) {
+      if (stanzas) stanzasCache = stanzas;
+      if (telemetry) telemetryCache = telemetry;
+
+      if (storage) {
+        document.getElementById('disk-used').textContent = `Used: ${storage.used_gb} GB`;
+        document.getElementById('disk-free').textContent = `Free: ${storage.free_gb} GB`;
+        document.getElementById('disk-bar').style.width = `${storage.used_pct}%`;
+        document.getElementById('kpi-free').textContent = `${storage.free_gb} GB`;
+      }
+
+      if (stanzas) {
+        document.getElementById('kpi-stanzas').textContent = stanzas.length;
+        document.getElementById('kpi-healthy').textContent = stanzas.filter(s => s.status === 'ok').length;
+        document.getElementById('kpi-backups').textContent = stanzas.reduce((a, s) => a + s.backups.length, 0);
+        renderAlertBanner(stanzas);
+        renderStanzas(stanzas);
+        renderChartStanzaSelector(stanzas);
+        if (serversCache.length) renderRestoreSelectors(serversCache, stanzas);
+      }
+
+      if (updatedAt) {
+        const lbl = document.getElementById('last-updated-label');
+        if (lbl) lbl.textContent = updatedAt.slice(11, 19);
+      }
+
+      requestAnimationFrame(() => {
+        drawWalLagChart();
+        drawDashboardTimeline();
+        drawDailyBackupChart();
+        drawPitrScrubber();
+      });
+    }
+
+    async function loadAll() {
+      const [storage, servers, stanzas, telRes] = await Promise.all([
+        api('/api/storage'),
+        api('/api/servers'),
+        api('/api/stanzas'),
+        api('/api/telemetry').catch(() => ({ telemetry: {} })),
+      ]);
+      serversCache = servers;
+      if (telRes.alert_config && telRes.alert_config.wal_lag_threshold_sec) {
+        alertThresholdSec = telRes.alert_config.wal_lag_threshold_sec;
+        const inp = document.getElementById('alert-threshold-input');
+        if (inp) inp.value = String(alertThresholdSec);
+      }
+      renderServers(servers);
+      renderLogSelectors(servers);
+      applyStateUpdate(storage, stanzas, telRes.telemetry || {}, telRes.updated_at || fmtBkkTime(Math.floor(Date.now() / 1000)));
+    }
+
+    function renderStanzas(stanzas) {
+      const tbody = document.getElementById('stanzas-tbody');
+      const filtered = (stanzas || []).filter(s => {
+        if (stanzaFilter === 'PROD') return s.env === 'PROD';
+        if (stanzaFilter === 'UAT') return s.env !== 'PROD';
+        if (stanzaFilter === 'ALERT') {
+          return s.status !== 'ok' || (s.archive_failed_count || 0) > 0 || (s.archive_lag_sec !== null && s.archive_lag_sec !== undefined && s.archive_lag_sec > alertThresholdSec);
+        }
+        return true;
+      });
+      if (!filtered.length) {
+        tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-6 text-center text-slate-400">No matching stanzas</td></tr>';
+        return;
+      }
+      tbody.innerHTML = filtered.map(s => {
+        const last = s.backups[s.backups.length - 1];
+        const ok = s.status === 'ok';
+        const badge = ok
+          ? '<span class="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 font-medium">ok</span>'
+          : `<span class="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400">${s.status}</span>`;
+        const envBadge = s.env === 'PROD'
+          ? '<span class="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-400 ml-1">PROD</span>'
+          : '<span class="px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-400 ml-1">UAT</span>';
+        const lag = s.archive_lag_sec;
+        const lagBadge = (lag === null || lag === undefined)
+          ? '<span class="text-slate-400">—</span>'
+          : (lag <= alertThresholdSec
+              ? `<span class="text-emerald-400 font-medium">● Near-Realtime</span> <span class="text-slate-400">(${lag}s ago)</span>`
+              : `<span class="text-rose-400 font-medium">⚠ Alert Lag ${lag}s</span>`);
+        const walTime = s.last_archived_time ? `<div class="font-mono text-slate-300 mt-0.5">${s.last_archived_time}</div>` : '';
+        const winText = (s.recoverable_from && s.recoverable_to)
+          ? `<div class="font-mono text-slate-300">${s.recoverable_from.slice(0,19)}</div><div class="font-mono text-emerald-400">→ ${s.recoverable_to.slice(0,19)}</div>`
+          : '—';
+        return `<tr>
+          <td class="px-4 py-3.5 font-mono font-semibold">${s.stanza}</td>
+          <td class="px-4 py-3.5">${s.host} ${envBadge}</td>
+          <td class="px-4 py-3.5">${badge}</td>
+          <td class="px-4 py-3.5">${last ? `${last.label} (${last.type})<div class="text-slate-400">${fmtBytes(last.repo_size)}</div>` : '—'}</td>
+          <td class="px-4 py-3.5">${lagBadge}${walTime}</td>
+          <td class="px-4 py-3.5">${winText}</td>
+          <td class="px-4 py-3.5 text-right space-x-1.5">
+            <button onclick="triggerJob('${s.server_id}','check')" class="px-2.5 py-1 rounded bg-slate-950 border border-slate-800 hover:bg-slate-800">Check</button>
+            <button onclick="triggerJob('${s.server_id}','diff')" class="px-2.5 py-1 rounded bg-slate-950 border border-slate-800 hover:bg-slate-800">Diff</button>
+            <button onclick="triggerJob('${s.server_id}','full')" class="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white">Full</button>
+          </td>
+        </tr>`;
+      }).join('');
+    }
+
+    function renderServers(servers) {
+      const grid = document.getElementById('servers-grid');
+      grid.innerHTML = servers.map(s => `
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2">
+          <div class="flex justify-between items-center">
+            <span class="font-semibold text-sm">${s.name} (${s.host})</span>
+            <span class="px-2 py-0.5 rounded-full ${s.allow_restore ? 'bg-sky-500/15 text-sky-400' : 'bg-rose-500/15 text-rose-400'}">${s.allow_restore ? 'Restore Allowed' : 'Backup Only'}</span>
+          </div>
+          <div class="text-slate-400">Stanza: <span class="font-mono text-slate-200">${s.stanza}</span> • ${s.env} • ${s.pg_service}</div>
+          <div class="flex gap-2 pt-1">
+            <button onclick="editSrv('${s.id}')" class="px-2.5 py-1 rounded bg-indigo-950/60 border border-indigo-800 text-indigo-300 hover:bg-indigo-900/60">Edit</button>
+            <button onclick="testSrv('${s.id}')" class="px-2.5 py-1 rounded bg-slate-900 border border-slate-800 hover:bg-slate-800">Test SSH</button>
+            <button onclick="delSrv('${s.id}')" class="px-2.5 py-1 rounded bg-rose-950/60 border border-rose-900 text-rose-300 hover:bg-rose-900/60">Remove</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function renderRestoreSelectors(servers, stanzas) {
+      const src = document.getElementById('restore-source');
+      const tgt = document.getElementById('restore-target');
+      const prevSrc = src.value;
+      const prevTgt = tgt.value;
+      src.innerHTML = stanzas.map(s => `<option value="${s.server_id}">${s.stanza} (${s.host})</option>`).join('');
+      tgt.innerHTML = servers.map(s => `<option value="${s.id}" ${s.allow_restore ? '' : 'disabled'}>${s.host} — ${s.name} ${s.allow_restore ? '(Allowed)' : '(LOCKED)'}</option>`).join('');
+      if (prevSrc && stanzas.some(s => s.server_id === prevSrc)) src.value = prevSrc;
+      if (prevTgt && servers.some(s => s.id === prevTgt)) tgt.value = prevTgt;
+      const now = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 19).replace('T', ' ') + '+07';
+      if (!document.getElementById('restore-time').value) document.getElementById('restore-time').value = now;
+      updateRestorePreview();
+    }
+
+    function setQuickTime(minsAgo) {
+      const dt = new Date(Date.now() + 7 * 3600 * 1000 - minsAgo * 60000);
+      document.getElementById('restore-time').value = dt.toISOString().slice(0, 19).replace('T', ' ') + '+07';
+      updateRestorePreview();
+    }
+
+    function updateRestorePreview() {
+      const srcId = document.getElementById('restore-source').value;
+      const stObj = stanzasCache.find(x => x.server_id === srcId);
+      const st = stObj?.stanza || 'uat-test';
+      const winEl = document.getElementById('restore-window-text');
+      if (winEl) {
+        winEl.textContent = (stObj?.recoverable_from && stObj?.recoverable_to)
+          ? `${stObj.recoverable_from}  →  ${stObj.recoverable_to}`
+          : 'No recoverable window yet';
+      }
+      const mode = document.getElementById('restore-mode').value;
+      const ts = document.getElementById('restore-time').value;
+      const tgtId = document.getElementById('restore-target').value;
+      const tgtObj = serversCache.find(x => x.id === tgtId);
+      const tgtLabel = tgtObj ? `${tgtObj.host} (${tgtObj.name})` : tgtId;
+      const arg = mode === 'time' ? `--type=time --target="${ts}"` : '--type=default';
+      document.getElementById('restore-preview').textContent =
+        `# Target server: ${tgtLabel}\npgbackrest --stanza=${st} --delta ${arg} --target-timeline=latest --target-action=promote restore`;
+      const confEl = document.getElementById('restore-confirm');
+      if (confEl) confEl.placeholder = st;
+      requestAnimationFrame(() => drawPitrScrubber());
+    }
+
+    function watchJob(jobId, consoleId, badgeId) {
+      const el = document.getElementById(consoleId);
+      const badge = badgeId ? document.getElementById(badgeId) : null;
+      el.classList.remove('hidden');
+      el.textContent = 'Starting job...';
+      if (badge) {
+        badge.textContent = 'running';
+        badge.className = 'text-xs text-amber-400 font-medium';
+      }
+      activeJobTargets[jobId] = { consoleId, badgeId };
+      // Fallback to REST polling only if WebSocket is not currently open
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        pollJobFallback(jobId, consoleId, badgeId);
+      }
+    }
+
+    function handleJobLogEvent(msg) {
+      const target = activeJobTargets[msg.job_id];
+      if (!target) return;
+      const el = document.getElementById(target.consoleId);
+      if (!el) return;
+      el.classList.remove('hidden');
+      if (el.textContent === 'Starting job...' || el.textContent === 'Ready.') {
+        el.textContent = msg.line;
+      } else {
+        el.textContent += '\n' + msg.line;
+      }
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function handleJobStatusEvent(msg) {
+      const target = activeJobTargets[msg.job_id];
+      if (!target) return;
+      const el = document.getElementById(target.consoleId);
+      const badge = target.badgeId ? document.getElementById(target.badgeId) : null;
+      if (el && Array.isArray(msg.logs) && msg.logs.length) {
+        el.textContent = msg.logs.join('\n');
+        el.scrollTop = el.scrollHeight;
+      }
+      if (badge) {
+        badge.textContent = msg.status;
+        badge.className = 'text-xs font-medium ' + (msg.status === 'success' ? 'text-emerald-400' : 'text-rose-400');
+      }
+      showToast(`Job ${msg.status}`);
+      delete activeJobTargets[msg.job_id];
+    }
+
+    function handleJobSnapshotEvent(msg) {
+      if (!activeJobTargets[msg.job_id]) {
+        activeJobTargets[msg.job_id] = { consoleId: 'job-console', badgeId: 'job-status-badge' };
+      }
+      const target = activeJobTargets[msg.job_id];
+      const el = document.getElementById(target.consoleId);
+      const badge = target.badgeId ? document.getElementById(target.badgeId) : null;
+      if (el && Array.isArray(msg.logs)) {
+        el.classList.remove('hidden');
+        el.textContent = msg.logs.join('\n') || 'Running...';
+        el.scrollTop = el.scrollHeight;
+      }
+      if (badge) {
+        badge.textContent = msg.status;
+        badge.className = 'text-xs text-amber-400 font-medium';
+      }
+    }
+
+    async function pollJobFallback(jobId, consoleId, badgeId) {
+      const el = document.getElementById(consoleId);
+      const badge = badgeId ? document.getElementById(badgeId) : null;
+      el.classList.remove('hidden');
+      while (true) {
+        if (ws && ws.readyState === WebSocket.OPEN) break;
+        const j = await api(`/api/job/${jobId}`);
+        el.textContent = j.logs.join('\n') || 'Running...';
+        el.scrollTop = el.scrollHeight;
+        if (badge) badge.textContent = j.status;
+        if (j.status !== 'running') {
+          showToast(`Job ${j.status}`);
+          delete activeJobTargets[jobId];
+          await loadAll();
+          break;
+        }
+        await new Promise(r => setTimeout(r, 1500));
+      }
+    }
+
+    async function triggerJob(serverId, action) {
+      try {
+        const res = await api('/api/job', { method: 'POST', body: JSON.stringify({ server_id: serverId, action }) });
+        watchJob(res.job_id, 'job-console', 'job-status-badge');
+      } catch (e) { showToast(e.message); }
+    }
+
+    async function executeRestore() {
+      try {
+        const res = await api('/api/restore', {
+          method: 'POST',
+          body: JSON.stringify({
+            source_server_id: document.getElementById('restore-source').value,
+            target_server_id: document.getElementById('restore-target').value,
+            mode: document.getElementById('restore-mode').value,
+            target_time: document.getElementById('restore-time').value,
+            confirm_stanza: document.getElementById('restore-confirm').value,
+          }),
+        });
+        watchJob(res.job_id, 'restore-console', null);
+      } catch (e) { showToast(e.message); }
+    }
+
+    async function addServer(e) {
+      e.preventDefault();
+      try {
+        await api('/api/servers', {
+          method: 'POST',
+          body: JSON.stringify({
+            id: document.getElementById('srv-id').value.trim(),
+            name: document.getElementById('srv-name').value.trim(),
+            host: document.getElementById('srv-host').value.trim(),
+            ssh_user: document.getElementById('srv-user').value.trim(),
+            ssh_pass: document.getElementById('srv-pass').value,
+            stanza: document.getElementById('srv-stanza').value.trim(),
+            env: document.getElementById('srv-env').value,
+            pg_service: document.getElementById('srv-pgsvc').value.trim(),
+            allow_restore: document.getElementById('srv-allow').checked,
+          }),
+        });
+        showToast('Server saved');
+        await loadAll();
+      } catch (err) { showToast(err.message); }
+    }
+
+    function editSrv(id) {
+      const s = serversCache.find(x => x.id === id);
+      if (!s) return;
+      document.getElementById('srv-id').value = s.id || '';
+      document.getElementById('srv-name').value = s.name || '';
+      document.getElementById('srv-host').value = s.host || '';
+      document.getElementById('srv-user').value = s.ssh_user || 'ubuntu';
+      document.getElementById('srv-pass').value = '';
+      document.getElementById('srv-stanza').value = s.stanza || '';
+      document.getElementById('srv-env').value = s.env || 'UAT';
+      document.getElementById('srv-pgsvc').value = s.pg_service || 'postgresql@16-main';
+      document.getElementById('srv-allow').checked = !!s.allow_restore;
+      document.getElementById('srv-id').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      showToast('Loaded ' + s.name + ' into form below');
+    }
+
+    async function testSrv(id) {
+      const res = await api(`/api/servers/${id}/test`, { method: 'POST' });
+      showToast((res.ok ? 'OK: ' : 'FAIL: ') + res.output);
+    }
+
+    async function delSrv(id) {
+      await api(`/api/servers/${id}`, { method: 'DELETE' });
+      showToast('Removed ' + id);
+      await loadAll();
+    }
+
+    async function loadSchedules() {
+      const el = document.getElementById('schedules-list');
+      el.innerHTML = 'Loading...';
+      const items = await Promise.all(serversCache.map(async s => {
+        const r = await api(`/api/schedules/${s.id}`);
+        return `<div class="bg-slate-950 border border-slate-800 rounded-lg p-3">
+          <div class="font-semibold mb-1">${s.name} (${s.host})</div>
+          <pre class="font-mono text-slate-300 whitespace-pre-wrap">${r.cron}</pre>
+        </div>`;
+      }));
+      el.innerHTML = items.join('');
+    }
+
+    let logsCache = [];
+
+    function renderLogSelectors(servers) {
+      const fSrv = document.getElementById('log-filter-server');
+      const rSrv = document.getElementById('remote-log-server');
+      if (fSrv) {
+        const cur = fSrv.value || 'ALL';
+        fSrv.innerHTML = '<option value="ALL">All Servers</option>' +
+          servers.map(s => `<option value="${s.id}">${s.name} (${s.host})</option>`).join('');
+        fSrv.value = cur;
+      }
+      if (rSrv) {
+        const curR = rSrv.value;
+        rSrv.innerHTML = servers.map(s => `<option value="${s.id}">${s.name} (${s.host})</option>`).join('');
+        if (curR && servers.some(s => s.id === curR)) rSrv.value = curR;
+      }
+    }
+
+    let logPage = 1;
+    let logPageSize = 50;
+
+    function onLogPageSizeChange() {
+      logPageSize = parseInt(document.getElementById('log-page-size')?.value || '50', 10) || 50;
+      logPage = 1;
+      renderLogsPage();
+    }
+
+    function changeLogPage(delta) {
+      const totalPages = Math.max(1, Math.ceil(logsCache.length / logPageSize));
+      const next = Math.max(1, Math.min(totalPages, logPage + delta));
+      if (next !== logPage) {
+        logPage = next;
+        renderLogsPage();
+      }
+    }
+
+    function renderLogsPage() {
+      const tbody = document.getElementById('logs-tbody');
+      const infoEl = document.getElementById('logs-page-info');
+      const numEl = document.getElementById('logs-page-num');
+      const prevBtn = document.getElementById('logs-prev-btn');
+      const nextBtn = document.getElementById('logs-next-btn');
+
+      if (!logsCache.length) {
+        tbody.innerHTML = '<tr><td colspan="7" class="px-3 py-6 text-center text-slate-400">No log entries found</td></tr>';
+        if (infoEl) infoEl.textContent = 'Showing 0 entries';
+        if (numEl) numEl.textContent = 'Page 1 / 1';
+        if (prevBtn) prevBtn.disabled = true;
+        if (nextBtn) nextBtn.disabled = true;
+        return;
+      }
+
+      const totalPages = Math.max(1, Math.ceil(logsCache.length / logPageSize));
+      logPage = Math.max(1, Math.min(totalPages, logPage));
+      const startIdx = (logPage - 1) * logPageSize;
+      const endIdx = Math.min(logsCache.length, startIdx + logPageSize);
+      const slice = logsCache.slice(startIdx, endIdx);
+
+      const statusBadge = st => {
+        if (st === 'success') return '<span class="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400">success</span>';
+        if (st === 'failed') return '<span class="px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-400">failed</span>';
+        if (st === 'running') return '<span class="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400">running</span>';
+        return '<span class="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">' + st + '</span>';
+      };
+
+      tbody.innerHTML = slice.map((e, offset) => {
+        const globalIdx = startIdx + offset;
+        return `
+          <tr class="hover:bg-slate-800/30">
+            <td class="px-3 py-2 font-mono text-[11px] text-slate-300 whitespace-nowrap">${e.timestamp}</td>
+            <td class="px-3 py-2 font-mono text-[11px]"><span class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-200">${e.category}</span></td>
+            <td class="px-3 py-2 font-mono text-[11px]">${e.action}</td>
+            <td class="px-3 py-2 text-slate-300">${e.detail}${e.client_ip ? ` <span class="text-slate-500 font-mono text-[10px]">(${e.client_ip})</span>` : ''}</td>
+            <td class="px-3 py-2">${statusBadge(e.status)}</td>
+            <td class="px-3 py-2 font-mono text-[11px] text-slate-400">${e.duration_sec !== null && e.duration_sec !== undefined ? e.duration_sec + 's' : '—'}</td>
+            <td class="px-3 py-2 text-right">${(e.output && e.output.length) ? `<button onclick="showLogOutput(${globalIdx})" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px]">View (${e.output.length})</button>` : '<span class="text-slate-600">—</span>'}</td>
+          </tr>
+        `;
+      }).join('');
+
+      if (infoEl) infoEl.textContent = `Showing ${startIdx + 1}–${endIdx} of ${logsCache.length} entries`;
+      if (numEl) numEl.textContent = `Page ${logPage} / ${totalPages}`;
+      if (prevBtn) prevBtn.disabled = logPage <= 1;
+      if (nextBtn) nextBtn.disabled = logPage >= totalPages;
+    }
+
+    async function loadLogs() {
+      const cat = document.getElementById('log-filter-cat').value;
+      const srv = document.getElementById('log-filter-server').value;
+      const tbody = document.getElementById('logs-tbody');
+      tbody.innerHTML = '<tr><td colspan="7" class="px-3 py-4 text-center text-slate-400">Loading logs...</td></tr>';
+      try {
+        logsCache = await api(`/api/logs?limit=500&category=${encodeURIComponent(cat)}&server_id=${encodeURIComponent(srv)}`);
+        logPage = 1;
+        renderLogsPage();
+      } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="7" class="px-3 py-4 text-center text-rose-400">${err.message}</td></tr>`;
+      }
+    }
+
+    function showLogOutput(idx) {
+      const e = logsCache[idx];
+      if (!e) return;
+      document.getElementById('log-output-title').textContent = `${e.timestamp} — ${e.category}:${e.action} (${e.status})`;
+      document.getElementById('log-output-pre').textContent = (e.output || []).join('\n');
+      document.getElementById('log-output-box').classList.remove('hidden');
+    }
+
+    async function loadRemoteLog() {
+      const srvId = document.getElementById('remote-log-server').value;
+      const lines = document.getElementById('remote-log-lines').value;
+      const pre = document.getElementById('remote-log-pre');
+      if (!srvId) return;
+      pre.textContent = 'Fetching logs from server...';
+      try {
+        const res = await api(`/api/logs/remote/${encodeURIComponent(srvId)}?lines=${lines}`);
+        pre.textContent = res.content || '(empty)';
+      } catch (err) {
+        pre.textContent = 'ERROR: ' + err.message;
+      }
+    }
+
+    // =========================================================================
+    // TradingView-Style HTML5 Canvas 2D Charts (WAL Lag + Backup/PITR Timeline)
+    // =========================================================================
+    let walHoverX = null;
+    let timelineHoverX = null;
+    let pitrHoverX = null;
+    let dailyHoverX = null;
+
+    function renderChartStanzaSelector(stanzas) {
+      const sel = document.getElementById('chart-stanza-select');
+      if (!sel || !stanzas.length) return;
+      const prev = sel.value;
+      sel.innerHTML = stanzas.map(s => `<option value="${s.server_id}">${s.stanza} (${s.env})</option>`).join('');
+      if (prev && stanzas.some(s => s.server_id === prev)) {
+        sel.value = prev;
+      } else {
+        const okSt = stanzas.find(s => s.status === 'ok') || stanzas[0];
+        if (okSt) sel.value = okSt.server_id;
+      }
+    }
+
+    function onChartStanzaChange() {
+      drawWalLagChart();
+      drawDashboardTimeline();
+      drawDailyBackupChart();
+    }
+
+    function setupHiDPICanvas(canvas) {
+      const rect = canvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) return null;
+      const dpr = window.devicePixelRatio || 1;
+      const w = Math.round(rect.width);
+      const h = Math.round(rect.height);
+      if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
+      }
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return { ctx, w, h };
+    }
+
+    function drawWalLagChart() {
+      const canvas = document.getElementById('wal-lag-canvas');
+      if (!canvas) return;
+      const setup = setupHiDPICanvas(canvas);
+      if (!setup) return;
+      const { ctx, w, h } = setup;
+
+      const sid = document.getElementById('chart-stanza-select')?.value;
+      const rawPoints = (telemetryCache[sid] || []).filter(p => p.lag_sec !== null && p.lag_sec !== undefined);
+      const badge = document.getElementById('wal-lag-badge');
+
+      ctx.clearRect(0, 0, w, h);
+
+      if (!rawPoints.length) {
+        if (badge) { badge.textContent = 'No data'; badge.className = 'font-mono text-slate-400'; }
+        ctx.fillStyle = '#64748b';
+        ctx.font = '12px ui-monospace, SFMono-Regular, monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('Waiting for WAL telemetry stream...', w / 2, h / 2);
+        return;
+      }
+
+      const lastPt = rawPoints[rawPoints.length - 1];
+      if (badge) {
+        badge.textContent = `${lastPt.lag_sec}s (${lastPt.status || 'ok'})`;
+        badge.className = 'font-mono font-semibold ' + (lastPt.lag_sec <= alertThresholdSec ? 'text-emerald-400' : 'text-rose-400');
+      }
+
+      const pad = { top: 14, right: 48, bottom: 24, left: 10 };
+      const plotW = Math.max(10, w - pad.left - pad.right);
+      const plotH = Math.max(10, h - pad.top - pad.bottom);
+      const maxLag = Math.max(alertThresholdSec * 1.15, ...rawPoints.map(p => p.lag_sec)) * 1.1;
+
+      // Grid lines + Y-axis labels on right (TradingView style)
+      const ySteps = 4;
+      ctx.font = '10px ui-monospace, SFMono-Regular, monospace';
+      ctx.textAlign = 'left';
+      for (let i = 0; i <= ySteps; i++) {
+        const val = Math.round((maxLag / ySteps) * i);
+        const y = pad.top + plotH - (val / maxLag) * plotH;
+        ctx.strokeStyle = '#1e293b';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(pad.left, y);
+        ctx.lineTo(pad.left + plotW, y);
+        ctx.stroke();
+        ctx.fillStyle = '#64748b';
+        ctx.fillText(`${val}s`, pad.left + plotW + 6, y + 3);
+      }
+
+      // Alert threshold line
+      const warnY = pad.top + plotH - (alertThresholdSec / maxLag) * plotH;
+      ctx.save();
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = 'rgba(245, 158, 11, 0.55)';
+      ctx.beginPath();
+      ctx.moveTo(pad.left, warnY);
+      ctx.lineTo(pad.left + plotW, warnY);
+      ctx.stroke();
+      ctx.restore();
+
+      const coords = rawPoints.map((p, idx) => {
+        const x = rawPoints.length === 1
+          ? pad.left + plotW / 2
+          : pad.left + (idx / (rawPoints.length - 1)) * plotW;
+        const y = pad.top + plotH - (p.lag_sec / maxLag) * plotH;
+        return { x, y, pt: p };
+      });
+
+      // Area gradient
+      const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + plotH);
+      const healthy = lastPt.lag_sec <= alertThresholdSec;
+      grad.addColorStop(0, healthy ? 'rgba(52, 211, 153, 0.28)' : 'rgba(245, 158, 11, 0.28)');
+      grad.addColorStop(1, 'rgba(15, 23, 42, 0.0)');
+
+      ctx.beginPath();
+      ctx.moveTo(coords[0].x, pad.top + plotH);
+      coords.forEach(c => ctx.lineTo(c.x, c.y));
+      ctx.lineTo(coords[coords.length - 1].x, pad.top + plotH);
+      ctx.closePath();
+      ctx.fillStyle = grad;
+      ctx.fill();
+
+      // Line
+      ctx.beginPath();
+      coords.forEach((c, idx) => (idx === 0 ? ctx.moveTo(c.x, c.y) : ctx.lineTo(c.x, c.y)));
+      ctx.strokeStyle = healthy ? '#34d399' : '#f59e0b';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // X-axis timestamps
+      ctx.fillStyle = '#64748b';
+      ctx.textAlign = 'center';
+      const xLabels = Math.min(4, coords.length);
+      for (let i = 0; i < xLabels; i++) {
+        const idx = xLabels === 1 ? 0 : Math.round((i / (xLabels - 1)) * (coords.length - 1));
+        const c = coords[idx];
+        ctx.fillText(fmtBkkShort(c.pt.ts), c.x, h - 7);
+      }
+
+      // Live glowing marker on latest tick + right-edge tag
+      const lastC = coords[coords.length - 1];
+      ctx.beginPath();
+      ctx.arc(lastC.x, lastC.y, 4, 0, Math.PI * 2);
+      ctx.fillStyle = healthy ? '#34d399' : '#f59e0b';
+      ctx.fill();
+      ctx.fillStyle = healthy ? '#059669' : '#d97706';
+      ctx.fillRect(pad.left + plotW + 2, lastC.y - 8, 42, 16);
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'left';
+      ctx.fillText(`${lastPt.lag_sec}s`, pad.left + plotW + 6, lastC.y + 3);
+
+      // Crosshair on hover
+      const tip = document.getElementById('wal-lag-tooltip');
+      if (walHoverX !== null && walHoverX >= pad.left && walHoverX <= pad.left + plotW) {
+        let nearest = coords[0];
+        let bestDist = Infinity;
+        for (const c of coords) {
+          const d = Math.abs(c.x - walHoverX);
+          if (d < bestDist) { bestDist = d; nearest = c; }
+        }
+        ctx.save();
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = '#94a3b8';
+        ctx.beginPath();
+        ctx.moveTo(nearest.x, pad.top);
+        ctx.lineTo(nearest.x, pad.top + plotH);
+        ctx.moveTo(pad.left, nearest.y);
+        ctx.lineTo(pad.left + plotW, nearest.y);
+        ctx.stroke();
+        ctx.restore();
+
+        ctx.beginPath();
+        ctx.arc(nearest.x, nearest.y, 5, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+
+        if (tip) {
+          tip.innerHTML = `<div>${fmtBkkTime(nearest.pt.ts)}</div><div>Lag: <span class="text-emerald-400">${nearest.pt.lag_sec}s</span> • Failed: ${nearest.pt.failed_count}</div>`;
+          tip.classList.remove('hidden');
+          tip.style.left = Math.min(w - 170, Math.max(8, nearest.x + 10)) + 'px';
+          tip.style.top = Math.max(8, nearest.y - 38) + 'px';
+        }
+      } else if (tip) {
+        tip.classList.add('hidden');
+      }
+    }
+
+    function drawBackupTimeline(canvasId, tooltipId, stObj, hoverX, selectedEpoch) {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return null;
+      const setup = setupHiDPICanvas(canvas);
+      if (!setup) return null;
+      const { ctx, w, h } = setup;
+      const tip = document.getElementById(tooltipId);
+
+      ctx.clearRect(0, 0, w, h);
+
+      const backups = (stObj && stObj.backups) ? stObj.backups : [];
+      const fromTs = parseBkkTime(stObj?.recoverable_from) || (backups[0]?.start ?? null);
+      const toTs = parseBkkTime(stObj?.recoverable_to) || Math.floor(Date.now() / 1000);
+
+      if (!stObj || !fromTs || !toTs || toTs <= fromTs) {
+        ctx.fillStyle = '#64748b';
+        ctx.font = '12px ui-monospace, SFMono-Regular, monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('No backup / PITR window available', w / 2, h / 2);
+        if (tip) tip.classList.add('hidden');
+        return null;
+      }
+
+      const span = Math.max(60, toTs - fromTs);
+      const padLeft = 14;
+      const padRight = 14;
+      const padTop = 16;
+      const padBottom = 26;
+      const plotW = Math.max(10, w - padLeft - padRight);
+      const plotH = Math.max(10, h - padTop - padBottom);
+      const toX = ts => padLeft + ((ts - fromTs) / span) * plotW;
+      const toTsFromX = x => Math.round(fromTs + ((Math.max(padLeft, Math.min(padLeft + plotW, x)) - padLeft) / plotW) * span);
+
+      // Subtle vertical grid + time labels
+      ctx.font = '10px ui-monospace, SFMono-Regular, monospace';
+      ctx.textAlign = 'center';
+      const ticks = 4;
+      for (let i = 0; i <= ticks; i++) {
+        const t = Math.round(fromTs + (span / ticks) * i);
+        const x = toX(t);
+        ctx.strokeStyle = '#1e293b';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x, padTop);
+        ctx.lineTo(x, padTop + plotH);
+        ctx.stroke();
+        ctx.fillStyle = '#64748b';
+        const d = new Date((t + 7 * 3600) * 1000).toISOString();
+        ctx.fillText(span > 86400 ? d.slice(5, 16).replace('T', ' ') : d.slice(11, 19), x, h - 7);
+      }
+
+      // Recoverable WAL Window bar at base
+      const barY = padTop + plotH - 8;
+      ctx.fillStyle = 'rgba(16, 185, 129, 0.25)';
+      ctx.fillRect(padLeft, barY, plotW, 6);
+      ctx.fillStyle = '#10b981';
+      ctx.fillRect(padLeft, barY + 2, plotW, 2);
+
+      // Backup bars (scaled by repo_size)
+      const maxSize = Math.max(1, ...backups.map(b => b.repo_size || 1));
+      const colorMap = { full: '#6366f1', diff: '#38bdf8', incr: '#34d399' };
+      const hitBoxes = [];
+
+      for (const b of backups) {
+        const bTs = b.stop || b.start;
+        if (!bTs) continue;
+        const bx = toX(bTs);
+        const barH = Math.max(18, Math.round(((b.repo_size || 0) / maxSize) * (plotH - 18)));
+        const by = barY - barH;
+        const bw = 10;
+        ctx.fillStyle = colorMap[b.type] || '#818cf8';
+        ctx.fillRect(bx - bw / 2, by, bw, barH);
+        hitBoxes.push({ x1: bx - 8, x2: bx + 8, y1: by, y2: barY, b });
+      }
+
+      // Selected PITR target line (amber)
+      if (selectedEpoch && selectedEpoch >= fromTs && selectedEpoch <= toTs) {
+        const sx = toX(selectedEpoch);
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(sx, padTop);
+        ctx.lineTo(sx, padTop + plotH);
+        ctx.stroke();
+        ctx.fillStyle = '#f59e0b';
+        ctx.beginPath();
+        ctx.arc(sx, barY + 3, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Hover crosshair + tooltip
+      if (hoverX !== null && hoverX >= padLeft && hoverX <= padLeft + plotW) {
+        const hoverTs = toTsFromX(hoverX);
+        ctx.save();
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = '#cbd5e1';
+        ctx.beginPath();
+        ctx.moveTo(hoverX, padTop);
+        ctx.lineTo(hoverX, padTop + plotH);
+        ctx.stroke();
+        ctx.restore();
+
+        const hit = hitBoxes.find(hb => hoverX >= hb.x1 && hoverX <= hb.x2);
+        if (tip) {
+          let html = `<div>${fmtBkkTime(hoverTs)}</div>`;
+          if (hit) {
+            html += `<div class="text-indigo-300">${hit.b.label} (${hit.b.type})</div><div>Repo: ${fmtBytes(hit.b.repo_size)} • DB: ${fmtBytes(hit.b.db_size)}</div>`;
+          } else {
+            html += `<div class="text-emerald-400">Click to pick PITR target</div>`;
+          }
+          tip.innerHTML = html;
+          tip.classList.remove('hidden');
+          tip.style.left = Math.min(w - 200, Math.max(8, hoverX + 10)) + 'px';
+          tip.style.top = '8px';
+        }
+      } else if (tip) {
+        tip.classList.add('hidden');
+      }
+
+      return { toTsFromX };
+    }
+
+    function drawDashboardTimeline() {
+      const sid = document.getElementById('chart-stanza-select')?.value;
+      const stObj = stanzasCache.find(s => s.server_id === sid);
+      const selectedTs = parseBkkTime(document.getElementById('restore-time')?.value);
+      return drawBackupTimeline('backup-timeline-canvas', 'backup-timeline-tooltip', stObj, timelineHoverX, selectedTs);
+    }
+
+    function drawPitrScrubber() {
+      const sid = document.getElementById('restore-source')?.value;
+      const stObj = stanzasCache.find(s => s.server_id === sid);
+      const selectedTs = parseBkkTime(document.getElementById('restore-time')?.value);
+      return drawBackupTimeline('pitr-scrubber-canvas', 'pitr-scrubber-tooltip', stObj, pitrHoverX, selectedTs);
+    }
+
+    function drawDailyBackupChart() {
+      const canvas = document.getElementById('daily-backup-canvas');
+      if (!canvas) return;
+      const setup = setupHiDPICanvas(canvas);
+      if (!setup) return;
+      const { ctx, w, h } = setup;
+      const tip = document.getElementById('daily-backup-tooltip');
+      const summaryEl = document.getElementById('daily-backup-summary');
+
+      ctx.clearRect(0, 0, w, h);
+
+      const allMode = !!document.getElementById('daily-all-stanzas')?.checked;
+      const sid = document.getElementById('chart-stanza-select')?.value;
+      const targets = allMode ? stanzasCache : stanzasCache.filter(s => s.server_id === sid);
+
+      const byDay = {};
+      let totalRepoAll = 0;
+      let totalDbAll = 0;
+      for (const st of targets) {
+        for (const b of (st.backups || [])) {
+          const ts = b.stop || b.start;
+          if (!ts) continue;
+          const day = new Date((ts + 7 * 3600) * 1000).toISOString().slice(0, 10);
+          if (!byDay[day]) byDay[day] = { day, full: 0, diff: 0, incr: 0, db: 0, count: 0 };
+          const repo = b.repo_size || 0;
+          const db = b.db_size || 0;
+          if (b.type === 'full') byDay[day].full += repo;
+          else if (b.type === 'diff') byDay[day].diff += repo;
+          else byDay[day].incr += repo;
+          byDay[day].db += db;
+          byDay[day].count += 1;
+          totalRepoAll += repo;
+          totalDbAll += db;
+        }
+      }
+
+      const days = Object.values(byDay).sort((a, b) => a.day.localeCompare(b.day));
+      if (summaryEl) {
+        if (days.length) {
+          const ratio = totalDbAll > 0 ? ((totalRepoAll / totalDbAll) * 100).toFixed(1) + '%' : '—';
+          summaryEl.textContent = `${days.length} day(s) • Total Repo: ${fmtBytes(totalRepoAll)} (${ratio} of DB)`;
+        } else {
+          summaryEl.textContent = 'No backup history';
+        }
+      }
+
+      if (!days.length) {
+        ctx.fillStyle = '#64748b';
+        ctx.font = '12px ui-monospace, SFMono-Regular, monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('No backup size data available', w / 2, h / 2);
+        if (tip) tip.classList.add('hidden');
+        return;
+      }
+
+      const pad = { top: 14, right: 64, bottom: 24, left: 14 };
+      const plotW = Math.max(10, w - pad.left - pad.right);
+      const plotH = Math.max(10, h - pad.top - pad.bottom);
+      const maxBytes = Math.max(1, ...days.map(d => d.full + d.diff + d.incr)) * 1.15;
+
+      // Grid lines + Y-axis labels
+      ctx.font = '10px ui-monospace, SFMono-Regular, monospace';
+      ctx.textAlign = 'left';
+      for (let i = 0; i <= 3; i++) {
+        const val = (maxBytes / 3) * i;
+        const y = pad.top + plotH - (val / maxBytes) * plotH;
+        ctx.strokeStyle = '#1e293b';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(pad.left, y);
+        ctx.lineTo(pad.left + plotW, y);
+        ctx.stroke();
+        ctx.fillStyle = '#64748b';
+        ctx.fillText(fmtBytes(val), pad.left + plotW + 6, y + 3);
+      }
+
+      const slotW = plotW / days.length;
+      const barW = Math.max(10, Math.min(44, slotW * 0.55));
+      const barBoxes = [];
+
+      days.forEach((d, idx) => {
+        const cx = pad.left + slotW * idx + slotW / 2;
+        const x = cx - barW / 2;
+        let curY = pad.top + plotH;
+
+        const segments = [
+          { key: 'full', val: d.full, color: '#6366f1' },
+          { key: 'diff', val: d.diff, color: '#38bdf8' },
+          { key: 'incr', val: d.incr, color: '#34d399' },
+        ];
+        for (const seg of segments) {
+          if (seg.val <= 0) continue;
+          const segH = Math.max(2, (seg.val / maxBytes) * plotH);
+          curY -= segH;
+          ctx.fillStyle = seg.color;
+          ctx.fillRect(x, curY, barW, segH);
+        }
+
+        // Date label on X-axis (skip some if crowded)
+        const step = Math.max(1, Math.ceil(days.length / 8));
+        if (idx % step === 0 || idx === days.length - 1) {
+          ctx.fillStyle = '#64748b';
+          ctx.textAlign = 'center';
+          ctx.fillText(d.day.slice(5), cx, h - 7);
+        }
+
+        barBoxes.push({ x1: pad.left + slotW * idx, x2: pad.left + slotW * (idx + 1), cx, d });
+      });
+
+      if (dailyHoverX !== null && dailyHoverX >= pad.left && dailyHoverX <= pad.left + plotW) {
+        const hit = barBoxes.find(b => dailyHoverX >= b.x1 && dailyHoverX <= b.x2);
+        if (hit) {
+          ctx.save();
+          ctx.setLineDash([3, 3]);
+          ctx.strokeStyle = '#cbd5e1';
+          ctx.beginPath();
+          ctx.moveTo(hit.cx, pad.top);
+          ctx.lineTo(hit.cx, pad.top + plotH);
+          ctx.stroke();
+          ctx.restore();
+
+          if (tip) {
+            const total = hit.d.full + hit.d.diff + hit.d.incr;
+            tip.innerHTML =
+              `<div class="font-semibold text-slate-100">${hit.d.day} (${hit.d.count} sets)</div>` +
+              `<div>Total Repo: <span class="text-emerald-400">${fmtBytes(total)}</span></div>` +
+              `<div class="text-[10px] text-slate-300">Full: ${fmtBytes(hit.d.full)} • Diff: ${fmtBytes(hit.d.diff)} • Incr: ${fmtBytes(hit.d.incr)}</div>`;
+            tip.classList.remove('hidden');
+            tip.style.left = Math.min(w - 220, Math.max(8, hit.cx + 10)) + 'px';
+            tip.style.top = '8px';
+          }
+        }
+      } else if (tip) {
+        tip.classList.add('hidden');
+      }
+    }
+
+    function bindTimelineInteractions() {
+      const walCanvas = document.getElementById('wal-lag-canvas');
+      if (walCanvas) {
+        walCanvas.addEventListener('mousemove', e => {
+          walHoverX = e.clientX - walCanvas.getBoundingClientRect().left;
+          drawWalLagChart();
+        });
+        walCanvas.addEventListener('mouseleave', () => {
+          walHoverX = null;
+          drawWalLagChart();
+        });
+      }
+
+      const tlCanvas = document.getElementById('backup-timeline-canvas');
+      if (tlCanvas) {
+        tlCanvas.addEventListener('mousemove', e => {
+          timelineHoverX = e.clientX - tlCanvas.getBoundingClientRect().left;
+          drawDashboardTimeline();
+        });
+        tlCanvas.addEventListener('mouseleave', () => {
+          timelineHoverX = null;
+          drawDashboardTimeline();
+        });
+        tlCanvas.addEventListener('click', e => {
+          const x = e.clientX - tlCanvas.getBoundingClientRect().left;
+          const res = drawDashboardTimeline();
+          if (!res) return;
+          const picked = fmtBkkTime(res.toTsFromX(x));
+          const sid = document.getElementById('chart-stanza-select')?.value;
+          if (sid) document.getElementById('restore-source').value = sid;
+          document.getElementById('restore-mode').value = 'time';
+          document.getElementById('restore-time').value = picked;
+          updateRestorePreview();
+          drawDashboardTimeline();
+          showToast(`PITR target set: ${picked}`);
+        });
+      }
+
+      const pitrCanvas = document.getElementById('pitr-scrubber-canvas');
+      if (pitrCanvas) {
+        let dragging = false;
+        const pickAt = clientX => {
+          const x = clientX - pitrCanvas.getBoundingClientRect().left;
+          pitrHoverX = x;
+          const res = drawPitrScrubber();
+          if (!res) return;
+          document.getElementById('restore-mode').value = 'time';
+          document.getElementById('restore-time').value = fmtBkkTime(res.toTsFromX(x));
+          updateRestorePreview();
+        };
+        pitrCanvas.addEventListener('mousedown', e => { dragging = true; pickAt(e.clientX); });
+        window.addEventListener('mouseup', () => { dragging = false; });
+        pitrCanvas.addEventListener('mousemove', e => {
+          if (dragging) { pickAt(e.clientX); }
+          else {
+            pitrHoverX = e.clientX - pitrCanvas.getBoundingClientRect().left;
+            drawPitrScrubber();
+          }
+        });
+        pitrCanvas.addEventListener('mouseleave', () => {
+          pitrHoverX = null;
+          drawPitrScrubber();
+        });
+      }
+
+      const dailyCanvas = document.getElementById('daily-backup-canvas');
+      if (dailyCanvas) {
+        dailyCanvas.addEventListener('mousemove', e => {
+          dailyHoverX = e.clientX - dailyCanvas.getBoundingClientRect().left;
+          drawDailyBackupChart();
+        });
+        dailyCanvas.addEventListener('mouseleave', () => {
+          dailyHoverX = null;
+          drawDailyBackupChart();
+        });
+      }
+
+      window.addEventListener('resize', () => {
+        drawWalLagChart();
+        drawDashboardTimeline();
+        drawDailyBackupChart();
+        drawPitrScrubber();
+      });
+    }
+
+    bindTimelineInteractions();
+
+    if (token) {
+      document.getElementById('login-view').classList.add('hidden');
+      document.getElementById('app-view').classList.remove('hidden');
+      connectWS();
+      loadAll().catch(() => {});
+    }
+  </script>
+</body>
+</html>

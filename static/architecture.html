@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SPP System Architecture — Production (Interactive Mockup)</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0b0f17;
+      color: #e2e8f0;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 20px;
+      min-height: 100vh;
+    }
+    .shell {
+      max-width: 1400px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .topbar {
+      background: #121824;
+      border: 1px solid #1f2937;
+      border-radius: 14px;
+      padding: 16px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .title-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .title-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    h1 { font-size: 18px; font-weight: 700; color: #f8fafc; }
+    .live-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      color: #34d399;
+      background: rgba(16, 185, 129, 0.12);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      padding: 3px 10px;
+      border-radius: 999px;
+    }
+    .live-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: #34d399;
+      box-shadow: 0 0 8px #34d399;
+      animation: pulse 1.6s infinite;
+    }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+    .subtitle { font-size: 12px; color: #94a3b8; }
+    .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .btn {
+      background: #1a2232;
+      color: #cbd5e1;
+      border: 1px solid #2b364a;
+      border-radius: 8px;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .btn:hover { background: #232d42; color: #fff; border-color: #3b82f6; }
+    .btn.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+    .divider { width: 1px; height: 20px; background: #263145; margin: 0 4px; }
+
+    .canvas-card {
+      background: #0e131d;
+      border: 1px solid #1f2937;
+      border-radius: 14px;
+      padding: 18px;
+      overflow-x: auto;
+      position: relative;
+    }
+    .board {
+      position: relative;
+      width: 1260px;
+      height: 760px;
+      margin: 0 auto;
+      background-image: radial-gradient(rgba(148, 163, 184, 0.08) 1px, transparent 1px);
+      background-size: 24px 24px;
+    }
+    .lane-label {
+      position: absolute;
+      left: 6px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #64748b;
+      writing-mode: vertical-rl;
+      transform: rotate(180deg);
+      pointer-events: none;
+    }
+    svg.wires {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 1;
+    }
+    .wire-path {
+      fill: none;
+      stroke-width: 2;
+      stroke-dasharray: 6 6;
+      animation: flowDash 1.4s linear infinite;
+      transition: opacity 0.2s ease, stroke-width 0.2s ease;
+    }
+    .paused .wire-path { animation-play-state: paused; }
+    .fast .wire-path { animation-duration: 0.55s; }
+    @keyframes flowDash { to { stroke-dashoffset: -24; } }
+
+    .node {
+      position: absolute;
+      width: 162px;
+      background: #131a27;
+      border: 1px solid #263248;
+      border-radius: 12px;
+      padding: 10px 10px 9px;
+      text-align: center;
+      cursor: pointer;
+      z-index: 5;
+      transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease, opacity 0.2s ease;
+    }
+    .node:hover, .node.hl {
+      transform: translateY(-2px);
+      border-color: #38bdf8;
+      box-shadow: 0 0 0 1px rgba(56,189,248,0.4), 0 10px 24px -6px rgba(56,189,248,0.35);
+      z-index: 15;
+    }
+    .node.dim { opacity: 0.22; }
+    .node-icon {
+      width: 28px; height: 28px;
+      margin: 0 auto 6px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.04);
+    }
+    .node-title { font-size: 12px; font-weight: 700; color: #f1f5f9; line-height: 1.25; }
+    .node-ip { font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #94a3b8; margin-top: 3px; }
+    .node-sub { font-size: 10px; color: #64748b; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tag {
+      position: absolute;
+      top: 6px; right: 6px;
+      font-size: 9px; font-weight: 700;
+      padding: 1px 5px; border-radius: 999px;
+    }
+    .tag-ok { background: rgba(16,185,129,0.16); color: #34d399; border: 1px solid rgba(16,185,129,0.35); }
+    .tag-part { background: rgba(245,158,11,0.16); color: #fbbf24; border: 1px solid rgba(245,158,11,0.35); }
+
+    .b-cyan { border-color: rgba(56,189,248,0.45); }
+    .b-purple { border-color: rgba(168,85,247,0.45); }
+    .b-amber { border-color: rgba(245,158,11,0.45); }
+    .b-green { border-color: rgba(16,185,129,0.45); }
+    .b-rose { border-color: rgba(244,63,94,0.45); }
+    .b-indigo { border-color: rgba(99,102,241,0.5); }
+    .b-teal { border-color: rgba(20,184,166,0.5); }
+
+    .legend {
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
+      padding-top: 12px; border-top: 1px solid #1e293b;
+      font-size: 11px; color: #94a3b8;
+    }
+    .legend-items { display: flex; flex-wrap: wrap; gap: 16px; }
+    .leg { display: inline-flex; align-items: center; gap: 7px; }
+    .leg-line { width: 22px; height: 3px; border-radius: 2px; }
+
+    /* Balloon Tooltip */
+    #balloon {
+      position: fixed;
+      display: none;
+      z-index: 100;
+      width: 340px;
+      background: rgba(15, 23, 42, 0.97);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(56, 189, 248, 0.55);
+      border-radius: 12px;
+      padding: 13px 14px;
+      box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.75);
+      pointer-events: none;
+      font-size: 12px;
+    }
+    .bl-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid #1e293b; margin-bottom: 8px; }
+    .bl-title { font-weight: 700; color: #f8fafc; font-size: 13px; }
+    .bl-ip { font-family: ui-monospace, monospace; color: #38bdf8; font-size: 11px; margin-top: 2px; }
+    .bl-row { display: flex; gap: 8px; margin-bottom: 5px; line-height: 1.4; }
+    .bl-k { width: 82px; flex-shrink: 0; color: #64748b; font-size: 11px; }
+    .bl-v { color: #e2e8f0; font-size: 11px; word-break: break-word; }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="topbar">
+      <div class="title-row">
+        <div class="title-left">
+          <h1>SPP System Architecture — Production (Interactive Mockup)</h1>
+          <span class="live-pill"><span class="live-dot"></span><span id="live-txt">Live Flow Simulation</span></span>
+        </div>
+        <div class="controls">
+          <button class="btn" id="btn-pause" onclick="togglePause()">⏸ Pause Flow</button>
+          <button class="btn" id="btn-speed" onclick="toggleSpeed()">Speed: Normal</button>
+          <span class="divider"></span>
+          <button class="btn active" data-f="all" onclick="setFilter('all')">All</button>
+          <button class="btn" data-f="wms" onclick="setFilter('wms')">WMS</button>
+          <button class="btn" data-f="tms" onclick="setFilter('tms')">TMS</button>
+          <button class="btn" data-f="erp" onclick="setFilter('erp')">ERP</button>
+          <button class="btn" data-f="ops" onclick="setFilter('ops')">Backup &amp; Monitor</button>
+        </div>
+      </div>
+      <div class="subtitle">เอาเมาส์ชี้ (Hover) ที่กล่อง Server เพื่อดู Balloon Tooltip รายละเอียด และไฮไลต์เส้นทางที่เชื่อมต่อกัน</div>
+    </div>
+
+    <div class="canvas-card">
+      <div class="board" id="board">
+        <div class="lane-label" style="top: 38px;">INGRESS / PROXY</div>
+        <div class="lane-label" style="top: 225px;">BACKEND SERVICES</div>
+        <div class="lane-label" style="top: 415px;">PRIMARY DATABASES</div>
+        <div class="lane-label" style="top: 605px;">REPLICAS &amp; OPS</div>
+
+        <svg class="wires" id="wires" viewBox="0 0 1260 760"></svg>
+        <div id="nodes-layer"></div>
+      </div>
+
+      <div class="legend">
+        <div class="legend-items">
+          <span class="leg"><span class="leg-line" style="background:#38bdf8;"></span>External / Proxy Flow</span>
+          <span class="leg"><span class="leg-line" style="background:#a855f7;"></span>API / Microservice Flow</span>
+          <span class="leg"><span class="leg-line" style="background:#10b981;"></span>Database Query / Replication Flow</span>
+          <span class="leg"><span class="leg-line" style="background:#6366f1;"></span>Backup PITR (pgBackRest -> MinIO)</span>
+          <span class="leg"><span class="leg-line" style="background:#14b8a6;"></span>Promtail Logs -> Loki</span>
+        </div>
+        <div>Built with HTML + Orthogonal SVG + &lt;animateMotion&gt;</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="balloon"></div>
+
+  <script>
+    const ICONS = {
+      docker: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2"><rect x="3" y="10" width="4" height="4"/><rect x="8" y="10" width="4" height="4"/><rect x="13" y="10" width="4" height="4"/><rect x="8" y="5" width="4" height="4"/><path d="M2 15h19c-.5 4-4 6-9 6s-9.5-2-10-6z"/></svg>',
+      proxy: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><circle cx="7" cy="7" r="1"/><circle cx="7" cy="17" r="1"/></svg>',
+      fw: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.5 9-8 10-4.5-1-8-5-8-10V6l8-4z"/></svg>',
+      cloud: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fb923c" stroke-width="2"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>',
+      db: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg>',
+      backup: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>',
+      monitor: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2dd4bf" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>'
+    };
+
+    const NODES = [
+      // Row 1 (y = 26)
+      { id:'frontend', x:120, y:26, w:170, cls:'b-cyan', icon:'docker', title:'Frontend Prod', ip:'10.1.1.6', sub:'16C / 31G • Vue UIs', tag:'Verified', ok:true, groups:['wms','tms'],
+        specs:[['Hostname','frontend-service'],['Spec','16 vCPU | 31 GiB RAM | 244G (6%)'],['UIs','intra (:5000), wms (:5010), tms (:5020), track (:4000)'],['More','supplier (:4100), stock (:10043), worktime (:8000-8002)']] },
+      { id:'npm', x:390, y:26, w:190, cls:'b-indigo', icon:'proxy', title:'Nginx Proxy Manager', ip:'10.1.1.150', sub:'SSL Offload • Promtail', tag:'Verified', ok:true, groups:['wms','tms','erp','ops'],
+        specs:[['Containers','npm-app-1, npm-db-1 (PG 17.5), promtail-npm'],['Role','SSL Offload, Reverse Proxy, Timing Logs'],['Disk','116 GB (33% used)'],['Logs -> Loki','wms_latency, wms_api_latency, tms_latency, tms_api_latency']] },
+      { id:'firewall', x:690, y:26, w:175, cls:'b-amber', icon:'fw', title:'Firewall', ip:'141.98.19.225', sub:'↔ 10.1.1.254', tag:'Verified', ok:true, groups:['wms','tms','erp'],
+        specs:[['WAN / LAN','141.98.19.225 ↔ 10.1.1.254'],['Role','Perimeter NAT & Port Forwarding']] },
+      { id:'cloudflare', x:970, y:26, w:210, cls:'b-amber', icon:'cloud', title:'Cloudflare & Users', ip:'DNS / WAF / TLS', sub:'erp, intra, wms, tms, track', tag:'Verified', ok:true, groups:['wms','tms','erp'],
+        specs:[['Domains','erp, intra, wms, tms, track.superpart.co.th'],['Role','External DNS Proxy, WAF, DDoS Protection']] },
+
+      // Row 2 (y = 210)
+      { id:'spp-be', x:50, y:210, w:175, cls:'b-amber', icon:'docker', title:'SPP Backend + Interface', ip:'10.1.1.3', sub:'8C / 31G • +interface-erp', tag:'Verified', ok:true, groups:['wms','erp','ops'],
+        specs:[['Hostname','services'],['Spec','8 vCPU | 31 GiB RAM | 244G (35%)'],['SPP APIs','intra (:7000), master (:7001), upload/dl (:7002/3), mail (:7004), wh (:7005)'],['Microservice','interface-erp-prod (:7030/:7031), master-item (:2000), promtail-interface'],['More','stock (:10042), websocket (:4500), line-liff (:8002)']] },
+      { id:'wms-be', x:255, y:210, w:175, cls:'b-cyan', icon:'docker', title:'WMS Backend Prod', ip:'10.1.1.4', sub:'16C / 31G • 14 branches', tag:'Verified', ok:true, groups:['wms','erp','ops'],
+        specs:[['Hostname','service-wms'],['Spec','16 vCPU | 31 GiB RAM | 244G (5%)'],['Branch APIs','14 branches api-wms (:9001–9014) + nginx (:9500–9513)'],['Other','claim-api (:5000), dashboard-wms (:5100), cadvisor (:8082)'],['Promtail','promtail-wms-backend -> 10.1.1.152:3100']] },
+      { id:'tms-be', x:460, y:210, w:175, cls:'b-green', icon:'docker', title:'TMS Backend Prod', ip:'10.1.1.5', sub:'16C / 31G • :7020/:7021', tag:'Verified', ok:true, groups:['tms'],
+        specs:[['Hostname','service-tms'],['Spec','16 vCPU | 31 GiB RAM | 244G (8%)'],['Containers','tms-backend (:7020), tms-master (:7021), tms-osrm (:5000), redis (:6379)']] },
+      { id:'svc-be', x:665, y:210, w:175, cls:'b-amber', icon:'docker', title:'Services Prod', ip:'10.1.1.7', sub:'8C / 15G • track :3010', tag:'Verified', ok:true, groups:['tms'],
+        specs:[['Hostname','spp-service-svc'],['Spec','8 vCPU | 15 GiB RAM | 244G (6%)'],['Containers','spp-track-backend (:3010), supplier (:4101/4102), woo-sync (:8100), airflow-bot']] },
+      { id:'erp-app', x:1015, y:210, w:165, cls:'b-purple', icon:'proxy', title:'ERP Front / App', ip:'10.1.1.92', sub:'Core ERP', tag:'Partial', ok:false, groups:['erp'],
+        specs:[['Role','ERP Frontend / Application'],['DB Target','10.1.1.90 (ERP DB)'],['Note','SSH port 22 timed out จากเครื่องนี้']] },
+
+      // Row 3 (y = 395)
+      { id:'db-spp', x:50, y:395, w:175, cls:'b-amber', icon:'db', title:'DB SPP (Primary)', ip:'10.1.1.8', sub:'PG 16.15 • spp, stock', tag:'Verified', ok:true, groups:['wms','ops'],
+        specs:[['Hostname','db-prod'],['Spec','16 vCPU | 31 GiB RAM | 490G (4%)'],['Engine','PostgreSQL 16.15 (wal_level=logical)'],['Databases','spp (173 MB), stock (12 MB), sip (8.1 MB), track (7.8 MB)'],['PITR','pgBackRest 2.60.1 (spp-prod) 431.3MB -> 53.8MB zst'],['Cron','Full อา. 02:00 / Diff จ-ส 02:00 | Replica: 10.1.1.88']] },
+      { id:'db-wms', x:255, y:395, w:175, cls:'b-cyan', icon:'db', title:'DB WMS (Primary)', ip:'10.1.1.9', sub:'PG 16.12 + PgBouncer', tag:'Verified', ok:true, groups:['wms','ops'],
+        specs:[['Hostname','db-wms-production'],['Engine','PostgreSQL 16.12 + PgBouncer'],['Database','wms (5.5 GB -> MinIO 869.5 MB zst)'],['PITR','pgBackRest 2.60.1 (wms-prod) Near-Realtime WAL'],['Cron','Full อา. 02:00 / Diff จ-ส 02:00 | Replica: 10.1.1.99']] },
+      { id:'db-tms', x:460, y:395, w:175, cls:'b-green', icon:'db', title:'DB TMS (Primary)', ip:'10.1.1.24', sub:'PG 16.13 + PgBouncer', tag:'Verified', ok:true, groups:['tms','ops'],
+        specs:[['Hostname','db-tms-production'],['Engine','PostgreSQL 16.13 + PgBouncer'],['Database','tms (410.1 MB -> MinIO 59 MB zst)'],['PITR','pgBackRest 2.60.1 (tms-prod) Near-Realtime WAL'],['Cron','Full อา. 02:00 / Diff จ-ส 02:00 | Replica: 10.1.1.240']] },
+      { id:'db-svc', x:665, y:395, w:175, cls:'b-amber', icon:'db', title:'DB Services', ip:'10.1.1.42', sub:'PG 16.12 • track, sip', tag:'Verified', ok:true, groups:['tms','ops'],
+        specs:[['Hostname','db-services-prod'],['Spec','16 vCPU | 31 GiB RAM | 342G (5%)'],['Engine','PostgreSQL 16.12 + PgBouncer (active)'],['Databases','track (43 MB), sip (30 MB)'],['PITR','pgBackRest 2.60.1 (service-prod) 94.9MB -> 12.7MB zst'],['Cron','Full อา. 02:00 / Diff จ-ส 02:00']] },
+      { id:'db-interface', x:848, y:395, w:150, cls:'b-rose', icon:'db', title:'DB Interface', ip:'10.1.1.165', sub:'PG 16.12 (1.7 GB)', tag:'Verified', ok:true, groups:['erp','ops'],
+        specs:[['Hostname','db-interface-production'],['Engine','PostgreSQL 16.12 (Standalone)'],['Database','interface (1.7 GB -> MinIO 294.5 MB zst)'],['PITR','pgBackRest 2.60.1 (interface-prod) Near-Realtime WAL']] },
+      { id:'db-erp', x:1015, y:395, w:165, cls:'b-purple', icon:'db', title:'ERP DB', ip:'10.1.1.90', sub:'MariaDB', tag:'Partial', ok:false, groups:['erp'],
+        specs:[['Role','ERP Database (MariaDB)'],['Connected From','10.1.1.92 (ERP Front)'],['Note','SSH port 22 timed out จากเครื่องนี้']] },
+
+      // Row 4 (y = 585)
+      { id:'rep-spp', x:50, y:585, w:175, cls:'b-amber', icon:'db', title:'Replica SPP', ip:'10.1.1.88', sub:'8C / 15G • Standby', tag:'Verified', ok:true, groups:['wms'],
+        specs:[['Hostname','SPP-DB-REPLICA-PROD'],['Spec','8 vCPU | 15 GiB RAM | 484G (1%)'],['Engine','PostgreSQL 16.15 (Standby in_recovery=t)'],['Source','Streaming from 10.1.1.8 (spp, stock)']] },
+      { id:'rep-wms', x:255, y:585, w:175, cls:'b-cyan', icon:'db', title:'Replica WMS', ip:'10.1.1.99', sub:'8C / 31G • Standby', tag:'Verified', ok:true, groups:['wms'],
+        specs:[['Hostname','db-wms-replica'],['Spec','8 vCPU | 31 GiB RAM | 490G (6%)'],['Engine','PostgreSQL 16.12 (Standby) + PgBouncer'],['Source','Streaming Async from 10.1.1.9 (wms 5767 MB)']] },
+      { id:'rep-tms', x:460, y:585, w:175, cls:'b-green', icon:'db', title:'Replica TMS', ip:'10.1.1.240', sub:'Standby (tms)', tag:'Partial', ok:false, groups:['tms'],
+        specs:[['Role','Streaming Replica for 10.1.1.24 (tms)'],['Note','SSH port 22 timed out จากเครื่องนี้']] },
+      { id:'backup-srv', x:695, y:585, w:225, cls:'b-indigo', icon:'backup', title:'Backup & PITR Server', ip:'10.1.1.211', sub:'pgBackRest :8088 • MinIO :9000', tag:'Verified', ok:true, groups:['ops','wms','tms','erp'],
+        specs:[['pgBackRest Manager','http://10.1.1.211:8088 (PROD Restore Locked)'],['MinIO S3','http://10.1.1.211:9000 (Bucket: pg-backups)'],['Free Space','~284.8 GB Free (Retention: 2 Full / 7 Diff)']] },
+      { id:'monitor-srv', x:960, y:585, w:220, cls:'b-teal', icon:'monitor', title:'Monitor & Log Server', ip:'10.1.1.152', sub:'Grafana • Loki :3100', tag:'Verified', ok:true, groups:['ops','wms','tms','erp'],
+        specs:[['Grafana','https://monitor.superpart.co.th'],['Loki (:3100)','npm-access-logs, springboot-api-logs, interface-erp-logs'],['Metrics','Prometheus + cAdvisor + Nginx stub_status']] }
+    ];
+
+    const NODE_MAP = Object.fromEntries(NODES.map(n => [n.id, n]));
+
+    // Orthogonal bus routes: [from, to, color, groups, customPathPoints?]
+    const EDGES = [
+      { from:'cloudflare', to:'firewall', color:'#38bdf8', groups:['wms','tms','erp'] },
+      { from:'firewall', to:'npm', color:'#38bdf8', groups:['wms','tms','erp'] },
+      { from:'npm', to:'frontend', color:'#38bdf8', groups:['wms','tms'] },
+      { from:'npm', to:'erp-app', color:'#38bdf8', groups:['erp'], busY: 148 },
+
+      { from:'npm', to:'spp-be', color:'#a855f7', groups:['wms','erp'], busY: 162 },
+      { from:'npm', to:'wms-be', color:'#a855f7', groups:['wms'], busY: 162 },
+      { from:'npm', to:'tms-be', color:'#a855f7', groups:['tms'], busY: 162 },
+      { from:'npm', to:'svc-be', color:'#a855f7', groups:['tms'], busY: 162 },
+      { from:'wms-be', to:'spp-be', color:'#a855f7', groups:['wms','erp'] },
+      { from:'spp-be', to:'erp-app', color:'#a855f7', groups:['erp'], topBusY: 184 },
+
+      { from:'spp-be', to:'db-spp', color:'#10b981', groups:['wms'] },
+      { from:'spp-be', to:'db-interface', color:'#10b981', groups:['erp'], busY: 350 },
+      { from:'wms-be', to:'db-wms', color:'#10b981', groups:['wms'] },
+      { from:'tms-be', to:'db-tms', color:'#10b981', groups:['tms'] },
+      { from:'svc-be', to:'db-svc', color:'#10b981', groups:['tms'] },
+      { from:'erp-app', to:'db-erp', color:'#10b981', groups:['erp'] },
+
+      { from:'db-spp', to:'rep-spp', color:'#10b981', groups:['wms'] },
+      { from:'db-wms', to:'rep-wms', color:'#10b981', groups:['wms'] },
+      { from:'db-tms', to:'rep-tms', color:'#10b981', groups:['tms'] },
+
+      { from:'db-spp', to:'backup-srv', color:'#6366f1', groups:['ops'], busY: 535 },
+      { from:'db-wms', to:'backup-srv', color:'#6366f1', groups:['ops'], busY: 535 },
+      { from:'db-tms', to:'backup-srv', color:'#6366f1', groups:['ops'], busY: 535 },
+      { from:'db-svc', to:'backup-srv', color:'#6366f1', groups:['ops'], busY: 535 },
+      { from:'db-interface', to:'backup-srv', color:'#6366f1', groups:['ops'], busY: 535 },
+
+      { from:'npm', to:'monitor-srv', color:'#14b8a6', groups:['ops'], busY: 132, rightX: 1215 },
+      { from:'wms-be', to:'monitor-srv', color:'#14b8a6', groups:['ops'], busY: 332 },
+      { from:'spp-be', to:'monitor-srv', color:'#14b8a6', groups:['ops'], busY: 365 }
+    ];
+
+    const nodesLayer = document.getElementById('nodes-layer');
+    NODES.forEach(n => {
+      const el = document.createElement('div');
+      el.className = `node ${n.cls}`;
+      el.dataset.id = n.id;
+      el.style.left = n.x + 'px';
+      el.style.top = n.y + 'px';
+      el.style.width = n.w + 'px';
+      el.innerHTML = `
+        <span class="tag ${n.ok ? 'tag-ok' : 'tag-part'}">${n.tag}</span>
+        <div class="node-icon">${ICONS[n.icon]}</div>
+        <div class="node-title">${n.title}</div>
+        <div class="node-ip">${n.ip}</div>
+        <div class="node-sub">${n.sub}</div>
+      `;
+      nodesLayer.appendChild(el);
+    });
+
+    function centerOf(n) { return { cx: n.x + n.w / 2, cy: n.y + 48, top: n.y, bottom: n.y + 98, left: n.x, right: n.x + n.w }; }
+
+    function buildOrthoPath(e) {
+      const a = centerOf(NODE_MAP[e.from]);
+      const b = centerOf(NODE_MAP[e.to]);
+      if (e.rightX) {
+        return `M ${a.cx} ${a.top} L ${a.cx} ${a.top - 14} L ${e.rightX} ${a.top - 14} L ${e.rightX} ${b.cy} L ${b.right} ${b.cy}`;
+      }
+      if (e.topBusY) {
+        return `M ${a.cx} ${a.top} L ${a.cx} ${e.topBusY} L ${b.cx} ${e.topBusY} L ${b.cx} ${b.top}`;
+      }
+      if (Math.abs(a.cy - b.cy) < 20) {
+        const y = a.cy;
+        return a.cx > b.cx ? `M ${a.left} ${y} L ${b.right} ${y}` : `M ${a.right} ${y} L ${b.left} ${y}`;
+      }
+      const startY = a.cy < b.cy ? a.bottom : a.top;
+      const endY = a.cy < b.cy ? b.top : b.bottom;
+      if (Math.abs(a.cx - b.cx) < 8) {
+        return `M ${a.cx} ${startY} L ${b.cx} ${endY}`;
+      }
+      const midY = e.busY || Math.round((startY + endY) / 2);
+      return `M ${a.cx} ${startY} L ${a.cx} ${midY} L ${b.cx} ${midY} L ${b.cx} ${endY}`;
+    }
+
+    const svg = document.getElementById('wires');
+    let isPaused = false;
+    let isFast = false;
+    let activeFilter = 'all';
+
+    function renderWires() {
+      svg.innerHTML = '';
+      EDGES.forEach((e, idx) => {
+        const d = buildOrthoPath(e);
+        const match = activeFilter === 'all' || e.groups.includes(activeFilter);
+
+        const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        g.dataset.from = e.from;
+        g.dataset.to = e.to;
+        g.style.opacity = match ? '0.9' : '0.12';
+        g.style.transition = 'opacity 0.2s ease';
+
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', d);
+        path.setAttribute('stroke', e.color);
+        path.setAttribute('class', 'wire-path');
+        g.appendChild(path);
+
+        if (!isPaused && match) {
+          const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          dot.setAttribute('r', '3.5');
+          dot.setAttribute('fill', e.color);
+          dot.setAttribute('style', `filter: drop-shadow(0 0 6px ${e.color});`);
+          const anim = document.createElementNS('http://www.w3.org/2000/svg', 'animateMotion');
+          anim.setAttribute('dur', isFast ? '1.2s' : '2.8s');
+          anim.setAttribute('repeatCount', 'indefinite');
+          anim.setAttribute('begin', `${(idx % 5) * 0.45}s`);
+          anim.setAttribute('path', d);
+          dot.appendChild(anim);
+          g.appendChild(dot);
+        }
+        svg.appendChild(g);
+      });
+    }
+
+    function togglePause() {
+      isPaused = !isPaused;
+      document.getElementById('board').classList.toggle('paused', isPaused);
+      document.getElementById('btn-pause').textContent = isPaused ? '▶ Resume Flow' : '⏸ Pause Flow';
+      document.getElementById('live-txt').textContent = isPaused ? 'Simulation Paused' : 'Live Flow Simulation';
+      renderWires();
+    }
+
+    function toggleSpeed() {
+      isFast = !isFast;
+      document.getElementById('board').classList.toggle('fast', isFast);
+      document.getElementById('btn-speed').textContent = isFast ? 'Speed: Fast' : 'Speed: Normal';
+      renderWires();
+    }
+
+    function setFilter(f) {
+      activeFilter = f;
+      document.querySelectorAll('[data-f]').forEach(b => b.classList.toggle('active', b.dataset.f === f));
+      document.querySelectorAll('.node').forEach(el => {
+        const info = NODE_MAP[el.dataset.id];
+        el.classList.toggle('dim', f !== 'all' && !info.groups.includes(f));
+      });
+      renderWires();
+    }
+
+    const balloon = document.getElementById('balloon');
+    function showBalloon(id, e) {
+      const n = NODE_MAP[id];
+      if (!n) return;
+      balloon.innerHTML = `
+        <div class="bl-head">
+          <div>
+            <div class="bl-title">${n.title}</div>
+            <div class="bl-ip">${n.ip}</div>
+          </div>
+          <span class="tag ${n.ok ? 'tag-ok' : 'tag-part'}" style="position:static;">${n.tag}</span>
+        </div>
+        ${n.specs.map(([k, v]) => `<div class="bl-row"><span class="bl-k">${k}</span><span class="bl-v">${v}</span></div>`).join('')}
+      `;
+      balloon.style.display = 'block';
+      moveBalloon(e);
+    }
+
+    function moveBalloon(e) {
+      const w = 340, h = balloon.offsetHeight || 200;
+      let x = e.clientX + 16, y = e.clientY + 16;
+      if (x + w > window.innerWidth - 12) x = e.clientX - w - 16;
+      if (y + h > window.innerHeight - 12) y = e.clientY - h - 16;
+      balloon.style.left = Math.max(8, x) + 'px';
+      balloon.style.top = Math.max(8, y) + 'px';
+    }
+
+    document.querySelectorAll('.node').forEach(el => {
+      el.addEventListener('mouseenter', e => {
+        const id = el.dataset.id;
+        const connected = new Set([id]);
+        document.querySelectorAll('#wires g').forEach(g => {
+          const hit = g.dataset.from === id || g.dataset.to === id;
+          if (hit) { connected.add(g.dataset.from); connected.add(g.dataset.to); }
+          g.style.opacity = hit ? '1' : '0.08';
+        });
+        document.querySelectorAll('.node').forEach(nEl => {
+          const nid = nEl.dataset.id;
+          nEl.classList.toggle('dim', !connected.has(nid));
+          nEl.classList.toggle('hl', connected.has(nid));
+        });
+        showBalloon(id, e);
+      });
+      el.addEventListener('mousemove', moveBalloon);
+      el.addEventListener('mouseleave', () => {
+        balloon.style.display = 'none';
+        document.querySelectorAll('.node').forEach(nEl => {
+          nEl.classList.remove('hl');
+          const info = NODE_MAP[nEl.dataset.id];
+          nEl.classList.toggle('dim', activeFilter !== 'all' && !info.groups.includes(activeFilter));
+        });
+        renderWires();
+      });
+    });
+
+    renderWires();
+
+    if (window.self !== window.top) {
+      document.body.style.padding = '0';
+      document.body.style.background = 'transparent';
+      document.body.style.overflow = 'hidden';
+      const sub = document.querySelector('.subtitle');
+      if (sub) sub.style.display = 'none';
+      const h1 = document.querySelector('.title-left h1');
+      if (h1) h1.style.display = 'none';
+      const topbar = document.querySelector('.topbar');
+      if (topbar) {
+        topbar.style.padding = '10px 14px';
+        topbar.style.background = '#0f172a';
+      }
+    }
+  </script>
+</body>
+</html>

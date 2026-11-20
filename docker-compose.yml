@@ -1,0 +1,15 @@
+services:
+  pgbackrest-manager:
+    build: .
+    container_name: pgbackrest-manager
+    restart: always
+    ports:
+      - "8088:8088"
+    environment:
+      APP_USER: ${APP_USER:-admin}
+      APP_PASS: ${APP_PASS:-changeme}
+      DATA_DIR: /app/data
+      MINIO_DATA_DIR: /minio-data
+    volumes:
+      - ./data:/app/data
+      - /home/ubuntu/minio/data/minio:/minio-data:ro
