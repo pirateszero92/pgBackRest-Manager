@@ -228,21 +228,28 @@ def require_auth(x_auth_token: Optional[str] = Header(default=None)):
 def _ssh_connect(server: Dict) -> paramiko.SSHClient:
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(
-        hostname=server["host"],
-        port=int(server.get("port", 22)),
-        username=server["ssh_user"],
-        password=server["ssh_pass"],
-        timeout=10,
-        look_for_keys=False,
-        allow_agent=False,
-    )
+    connect_kwargs: Dict = {
+        "hostname": server["host"],
+        "port": int(server.get("port", 22)),
+        "username": server["ssh_user"],
+        "timeout": 10,
+        "look_for_keys": False,
+        "allow_agent": False,
+    }
+    key_path = server.get("ssh_key_path")
+    if key_path and Path(key_path).exists():
+        connect_kwargs["key_filename"] = key_path
+    elif server.get("ssh_pass"):
+        connect_kwargs["password"] = server["ssh_pass"]
+    client.connect(**connect_kwargs)
     return client
 
 
 def _wrap_sudo(server: Dict, command: str) -> str:
-    sudo_pass = server.get("sudo_pass") or server["ssh_pass"]
-    return f"echo {json.dumps(sudo_pass)} | sudo -S -p '' bash -lc {json.dumps(command)}"
+    sudo_pass = server.get("sudo_pass") or server.get("ssh_pass") or ""
+    if sudo_pass:
+        return f"echo {json.dumps(sudo_pass)} | sudo -S -p '' bash -lc {json.dumps(command)}"
+    return f"sudo -n bash -lc {json.dumps(command)}"
 
 
 def ssh_run(server: Dict, command: str, timeout: int = 30) -> tuple[int, str, str]:
@@ -317,6 +324,8 @@ class ServerReq(BaseModel):
     port: int = 22
     ssh_user: str = "ubuntu"
     ssh_pass: str = ""
+    ssh_key_path: Optional[str] = None
+    db_type: str = "postgres"  # postgres or mariadb
     stanza: str
     env: str = "UAT"
     pg_service: str = "postgresql@16-main"
@@ -373,13 +382,60 @@ def collect_storage_info() -> Dict:
     }
 
 
+def collect_mariadb_stanza(srv: Dict, entry: Dict) -> Dict:
+    stanza = srv["stanza"]
+    meta_file = f"/var/lib/mariadb-backup-meta/{stanza}/manifest.json"
+    cmd = (
+        "systemctl is-active mariadb && echo '___MDB___' && "
+        "mariadb -Nse \"SELECT @@log_bin, COALESCE(SUM(data_length + index_length), 0) FROM information_schema.tables;\" && "
+        "echo '___MANIFEST___' && "
+        f"(cat {meta_file} 2>/dev/null || echo '[]')"
+    )
+    rc, out, err = ssh_run(srv, cmd, timeout=15)
+    if rc != 0:
+        entry["status"] = "not configured"
+        entry["error"] = (err or out).strip()[:200]
+        return entry
+
+    parts = out.split("___MDB___")
+    svc_status = parts[0].strip()
+    entry["status"] = "ok" if svc_status == "active" else svc_status
+
+    rest = parts[1] if len(parts) > 1 else ""
+    subparts = rest.split("___MANIFEST___")
+    mdb_line = subparts[0].strip().split()
+    log_bin_on = (mdb_line[0] == "1") if mdb_line else False
+    entry["log_bin"] = "ON" if log_bin_on else "OFF"
+
+    manifest_raw = subparts[1].strip() if len(subparts) > 1 else "[]"
+    try:
+        backups = json.loads(manifest_raw) if manifest_raw else []
+    except Exception:
+        backups = []
+
+    entry["backups"] = backups
+    if backups:
+        earliest = backups[0].get("stop") or backups[0].get("start")
+        latest = backups[-1].get("stop") or backups[-1].get("start")
+        if earliest:
+            entry["recoverable_from"] = datetime.fromtimestamp(earliest, tz=TZ_BKK).strftime("%Y-%m-%d %H:%M:%S+07")
+        if latest:
+            latest_str = datetime.fromtimestamp(latest, tz=TZ_BKK).strftime("%Y-%m-%d %H:%M:%S+07")
+            entry["recoverable_to"] = latest_str
+            entry["last_archived_time"] = latest_str
+            entry["archive_lag_sec"] = max(0, int(time.time()) - int(latest))
+    return entry
+
+
 def collect_single_stanza(srv: Dict) -> Dict:
     stanza = srv["stanza"]
+    db_type = srv.get("db_type", "postgres")
     entry = {
         "server_id": srv["id"],
         "name": srv["name"],
         "host": srv["host"],
         "env": srv.get("env", "UAT"),
+        "db_type": db_type,
         "stanza": stanza,
         "allow_restore": bool(srv.get("allow_restore", False)),
         "status": "unknown",
@@ -395,6 +451,8 @@ def collect_single_stanza(srv: Dict) -> Dict:
         "error": None,
     }
     try:
+        if db_type == "mariadb":
+            return collect_mariadb_stanza(srv, entry)
         cmd = (
             f"sudo -u postgres pgbackrest --stanza={stanza} --output=json info && "
             "echo '___ARCHIVER___' && "
@@ -574,13 +632,15 @@ def add_server(req: ServerReq, request: Request, _: bool = Depends(require_auth)
     servers = load_servers()
     existing = next((s for s in servers if s["id"] == req.id), None)
     data = req.model_dump()
-    if not data["ssh_pass"]:
+    if not data["ssh_pass"] and not data.get("ssh_key_path"):
         if existing and existing.get("ssh_pass"):
             data["ssh_pass"] = existing["ssh_pass"]
             if existing.get("sudo_pass"):
                 data["sudo_pass"] = existing["sudo_pass"]
+        elif existing and existing.get("ssh_key_path"):
+            data["ssh_key_path"] = existing["ssh_key_path"]
         else:
-            raise HTTPException(status_code=400, detail="SSH password is required for new server")
+            raise HTTPException(status_code=400, detail="SSH password or SSH key path is required for new server")
     servers = [s for s in servers if s["id"] != req.id]
     servers.append(data)
     save_servers(servers)
@@ -606,9 +666,13 @@ def test_server(server_id: str, request: Request, _: bool = Depends(require_auth
         raise HTTPException(status_code=404, detail="Server not found")
     ip = request.client.host if request.client else None
     try:
-        rc, out, err = ssh_run(srv, "pgbackrest version && systemctl is-active " + srv.get("pg_service", "postgresql@16-main"), timeout=12)
+        if srv.get("db_type", "postgres") == "mariadb":
+            test_cmd = "mariadb-backup --version && systemctl is-active mariadb && aws --endpoint-url http://10.1.1.211:9000 s3 ls s3://pg-backups/ >/dev/null && echo 'S3 OK'"
+        else:
+            test_cmd = "pgbackrest version && systemctl is-active " + srv.get("pg_service", "postgresql@16-main")
+        rc, out, err = ssh_run(srv, test_cmd, timeout=12)
         output_text = (out + "\n" + err).strip()
-        add_log_entry("SERVER", "test_ssh", f"SSH/pgBackRest test on {srv['host']}", status="success" if rc == 0 else "failed", server_id=server_id, client_ip=ip, output=output_text.splitlines())
+        add_log_entry("SERVER", "test_ssh", f"SSH/{srv.get('db_type','postgres')} test on {srv['host']}", status="success" if rc == 0 else "failed", server_id=server_id, client_ip=ip, output=output_text.splitlines())
         return {"ok": rc == 0, "output": output_text}
     except Exception as e:
         add_log_entry("SERVER", "test_ssh", f"SSH test failed on {srv['host']}: {e}", status="failed", server_id=server_id, client_ip=ip, output=[str(e)])
@@ -734,7 +798,11 @@ def get_schedules(server_id: str, _: bool = Depends(require_auth)):
     if not srv:
         raise HTTPException(status_code=404, detail="Server not found")
     try:
-        rc, out, err = ssh_run(srv, "sudo crontab -u postgres -l 2>/dev/null || echo '(no cron configured)'", timeout=10)
+        if srv.get("db_type", "postgres") == "mariadb":
+            cron_cmd = "sudo crontab -l 2>/dev/null || echo '(no cron configured)'"
+        else:
+            cron_cmd = "sudo crontab -u postgres -l 2>/dev/null || echo '(no cron configured)'"
+        rc, out, err = ssh_run(srv, cron_cmd, timeout=10)
         return {"ok": True, "cron": out.strip()}
     except Exception as e:
         return {"ok": False, "cron": str(e)}
@@ -752,6 +820,67 @@ def _finalize_job(job_id: str, status: str) -> None:
     POLL_WAKE_EVENT.set()
 
 
+def _build_mariadb_job_cmd(stanza: str, action: str) -> tuple[str, int]:
+    meta_dir = f"/var/lib/mariadb-backup-meta/{stanza}"
+    s3_prefix = f"s3://pg-backups/mariadb/{stanza}"
+    ep = "http://10.1.1.211:9000"
+    if action == "check":
+        cmd = (
+            "mariadb-backup --version && "
+            "echo 'Service:' $(systemctl is-active mariadb) && "
+            "mariadb -Nse \"SELECT CONCAT('log_bin=', @@log_bin, ' binlog_format=', @@binlog_format);\" && "
+            f"aws --endpoint-url {ep} s3 ls {s3_prefix}/ || true"
+        )
+        return cmd, 60
+
+    btype = "full" if action == "full" else "incr"
+    script = f"""set -euo pipefail
+mkdir -p {meta_dir} {meta_dir}/lsn_tmp
+LABEL=$(date +'%Y%m%d-%H%M%S')_{btype.upper()}
+OBJ_KEY="mariadb/{stanza}/${{LABEL}}.mbstream.zst"
+START_TS=$(date +%s)
+INCR_ARG=""
+if [ "{btype}" = "incr" ]; then
+  if [ ! -f {meta_dir}/latest_lsn ]; then
+    echo "ERROR: No base Full backup LSN found in {meta_dir}/latest_lsn. Run Full backup first."
+    exit 1
+  fi
+  LAST_LSN=$(cat {meta_dir}/latest_lsn)
+  INCR_ARG="--incremental-lsn=${{LAST_LSN}}"
+  echo "Starting MariaDB Incremental backup from LSN=${{LAST_LSN}} -> s3://pg-backups/${{OBJ_KEY}}"
+else
+  echo "Starting MariaDB Full backup -> s3://pg-backups/${{OBJ_KEY}}"
+fi
+rm -rf {meta_dir}/lsn_tmp/*
+mariadb-backup --backup --stream=mbstream --extra-lsndir={meta_dir}/lsn_tmp ${{INCR_ARG}} 2>>/var/log/mariadb-backup-{stanza}.log \\
+  | zstd -T2 -3 \\
+  | aws --endpoint-url {ep} s3 cp - s3://pg-backups/${{OBJ_KEY}}
+STOP_TS=$(date +%s)
+TO_LSN=$(awk -F= '/^to_lsn/ {{gsub(/ /,"",$2); print $2}}' {meta_dir}/lsn_tmp/xtrabackup_checkpoints)
+echo "${{TO_LSN}}" > {meta_dir}/latest_lsn
+REPO_SIZE=$(aws --endpoint-url {ep} s3api head-object --bucket pg-backups --key "${{OBJ_KEY}}" --query ContentLength --output text 2>/dev/null || echo 0)
+DB_SIZE=$(mariadb -Nse "SELECT COALESCE(SUM(data_length + index_length), 0) FROM information_schema.tables;" 2>/dev/null || echo 0)
+python3 - <<PY
+import json, pathlib
+mf = pathlib.Path("{meta_dir}/manifest.json")
+items = json.loads(mf.read_text()) if mf.exists() else []
+items.append({{
+    "label": "${{LABEL}}",
+    "type": "{btype}",
+    "start": int("${{START_TS}}"),
+    "stop": int("${{STOP_TS}}"),
+    "db_size": int("${{DB_SIZE}}"),
+    "repo_size": int("${{REPO_SIZE}}"),
+    "to_lsn": "${{TO_LSN}}",
+    "object": "${{OBJ_KEY}}",
+}})
+mf.write_text(json.dumps(items[-60:], indent=2))
+PY
+echo "Completed ${{LABEL}} (${{btype}}) LSN=${{TO_LSN}} repo_size=${{REPO_SIZE}} bytes in $((STOP_TS - START_TS))s"
+"""
+    return script, 7200
+
+
 @app.post("/api/job")
 def run_job(req: JobReq, request: Request, _: bool = Depends(require_auth)):
     if req.action not in ("check", "diff", "full"):
@@ -762,20 +891,26 @@ def run_job(req: JobReq, request: Request, _: bool = Depends(require_auth)):
 
     job_id = uuid.uuid4().hex[:12]
     stanza = srv["stanza"]
+    db_type = srv.get("db_type", "postgres")
     ip = request.client.host if request.client else None
     with JOB_LOCK:
         JOBS[job_id] = {"id": job_id, "status": "running", "logs": []}
-    add_log_entry("JOB", req.action, f"pgBackRest {req.action} on {srv['name']} ({srv['host']})", status="running", server_id=srv["id"], job_id=job_id, client_ip=ip)
+    add_log_entry("JOB", req.action, f"{db_type} {req.action} on {srv['name']} ({srv['host']})", status="running", server_id=srv["id"], job_id=job_id, client_ip=ip)
 
     def worker():
         try:
-            cmd = (
-                f"sudo -u postgres pgbackrest --stanza={stanza} check"
-                if req.action == "check"
-                else f"sudo -u postgres pgbackrest --stanza={stanza} --type={req.action} backup"
-            )
-            append_job_log(job_id, f"Running on {srv['host']} ({stanza}): {cmd}")
-            rc = ssh_run_stream(srv, cmd, lambda line: append_job_log(job_id, line), timeout=600)
+            if db_type == "mariadb":
+                cmd, job_timeout = _build_mariadb_job_cmd(stanza, req.action)
+                append_job_log(job_id, f"Running MariaDB {req.action} on {srv['host']} ({stanza})...")
+            else:
+                cmd = (
+                    f"sudo -u postgres pgbackrest --stanza={stanza} check"
+                    if req.action == "check"
+                    else f"sudo -u postgres pgbackrest --stanza={stanza} --type={req.action} backup"
+                )
+                job_timeout = 600
+                append_job_log(job_id, f"Running on {srv['host']} ({stanza}): {cmd}")
+            rc = ssh_run_stream(srv, cmd, lambda line: append_job_log(job_id, line), timeout=job_timeout)
             status = "success" if rc == 0 else "failed"
             append_job_log(job_id, f"Finished with exit code {rc}")
             _finalize_job(job_id, status)
@@ -904,10 +1039,16 @@ def get_remote_pgbackrest_logs(server_id: str, lines: int = 150, _: bool = Depen
     if not srv:
         raise HTTPException(status_code=404, detail="Server not found")
     n = max(20, min(lines, 500))
-    cmd = (
-        f"ls -1t /var/log/pgbackrest/*.log 2>/dev/null | head -n 3 | xargs -r tail -n {n} "
-        f"|| echo '(No /var/log/pgbackrest/*.log files found on this server)'"
-    )
+    if srv.get("db_type", "postgres") == "mariadb":
+        cmd = (
+            f"tail -n {n} /var/log/mariadb-backup-{srv['stanza']}.log /var/log/mysql/error.log 2>/dev/null "
+            "|| echo '(No MariaDB backup/error logs found on this server)'"
+        )
+    else:
+        cmd = (
+            f"ls -1t /var/log/pgbackrest/*.log 2>/dev/null | head -n 3 | xargs -r tail -n {n} "
+            f"|| echo '(No /var/log/pgbackrest/*.log files found on this server)'"
+        )
     try:
         rc, out, err = ssh_run(srv, cmd, timeout=15)
         return {"ok": rc == 0, "server": srv["name"], "host": srv["host"], "content": (out or err).strip()}

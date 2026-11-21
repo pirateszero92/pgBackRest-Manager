@@ -317,7 +317,12 @@
             <input id="srv-name" required placeholder="Name (e.g. db-tms-prod)" class="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800" />
             <input id="srv-host" required placeholder="IP (e.g. 10.1.1.24)" class="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800" />
             <input id="srv-user" required value="ubuntu" placeholder="SSH User" class="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800" />
-            <input id="srv-pass" type="password" placeholder="SSH/Sudo Password (blank = keep existing)" class="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800" />
+            <input id="srv-pass" type="password" placeholder="SSH/Sudo Password (blank = keep/use key)" class="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800" />
+            <input id="srv-sshkey" placeholder="SSH Key Path (optional, e.g. /app/data/id_mariadb)" class="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800" />
+            <select id="srv-dbtype" class="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800">
+              <option value="postgres">PostgreSQL (pgBackRest)</option>
+              <option value="mariadb">MariaDB (mariadb-backup)</option>
+            </select>
             <input id="srv-stanza" required placeholder="Stanza (e.g. tms-prod)" class="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800" />
             <select id="srv-env" class="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800">
               <option value="UAT">UAT</option>
@@ -835,18 +840,22 @@
         const envBadge = s.env === 'PROD'
           ? '<span class="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-400 ml-1">PROD</span>'
           : '<span class="px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-400 ml-1">UAT</span>';
+        const isMdb = s.db_type === 'mariadb';
+        const engineBadge = isMdb
+          ? '<span class="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 ml-1 text-[10px]">MariaDB</span>'
+          : '<span class="px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300 ml-1 text-[10px]">PG</span>';
         const lag = s.archive_lag_sec;
         const lagBadge = (lag === null || lag === undefined)
-          ? '<span class="text-slate-400">—</span>'
+          ? `<span class="text-slate-400">${isMdb ? 'No backup yet' : '—'}</span>`
           : (lag <= alertThresholdSec
-              ? `<span class="text-emerald-400 font-medium">● Near-Realtime</span> <span class="text-slate-400">(${lag}s ago)</span>`
+              ? `<span class="text-emerald-400 font-medium">● ${isMdb ? 'Recent Backup' : 'Near-Realtime'}</span> <span class="text-slate-400">(${lag}s ago)</span>`
               : `<span class="text-rose-400 font-medium">⚠ Alert Lag ${lag}s</span>`);
-        const walTime = s.last_archived_time ? `<div class="font-mono text-slate-300 mt-0.5">${s.last_archived_time}</div>` : '';
+        const walTime = s.last_archived_time ? `<div class="font-mono text-slate-300 mt-0.5">${s.last_archived_time}${isMdb && s.log_bin ? ` <span class="text-[10px] text-slate-400">(log_bin:${s.log_bin})</span>` : ''}</div>` : '';
         const winText = (s.recoverable_from && s.recoverable_to)
           ? `<div class="font-mono text-slate-300">${s.recoverable_from.slice(0,19)}</div><div class="font-mono text-emerald-400">→ ${s.recoverable_to.slice(0,19)}</div>`
           : '—';
         return `<tr>
-          <td class="px-4 py-3.5 font-mono font-semibold">${s.stanza}</td>
+          <td class="px-4 py-3.5 font-mono font-semibold">${s.stanza}${engineBadge}</td>
           <td class="px-4 py-3.5">${s.host} ${envBadge}</td>
           <td class="px-4 py-3.5">${badge}</td>
           <td class="px-4 py-3.5">${last ? `${last.label} (${last.type})<div class="text-slate-400">${fmtBytes(last.repo_size)}</div>` : '—'}</td>
@@ -854,7 +863,7 @@
           <td class="px-4 py-3.5">${winText}</td>
           <td class="px-4 py-3.5 text-right space-x-1.5">
             <button onclick="triggerJob('${s.server_id}','check')" class="px-2.5 py-1 rounded bg-slate-950 border border-slate-800 hover:bg-slate-800">Check</button>
-            <button onclick="triggerJob('${s.server_id}','diff')" class="px-2.5 py-1 rounded bg-slate-950 border border-slate-800 hover:bg-slate-800">Diff</button>
+            <button onclick="triggerJob('${s.server_id}','diff')" class="px-2.5 py-1 rounded bg-slate-950 border border-slate-800 hover:bg-slate-800">${isMdb ? 'Incr' : 'Diff'}</button>
             <button onclick="triggerJob('${s.server_id}','full')" class="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white">Full</button>
           </td>
         </tr>`;
@@ -1041,6 +1050,8 @@
             host: document.getElementById('srv-host').value.trim(),
             ssh_user: document.getElementById('srv-user').value.trim(),
             ssh_pass: document.getElementById('srv-pass').value,
+            ssh_key_path: document.getElementById('srv-sshkey').value.trim() || null,
+            db_type: document.getElementById('srv-dbtype').value,
             stanza: document.getElementById('srv-stanza').value.trim(),
             env: document.getElementById('srv-env').value,
             pg_service: document.getElementById('srv-pgsvc').value.trim(),
@@ -1060,6 +1071,8 @@
       document.getElementById('srv-host').value = s.host || '';
       document.getElementById('srv-user').value = s.ssh_user || 'ubuntu';
       document.getElementById('srv-pass').value = '';
+      document.getElementById('srv-sshkey').value = s.ssh_key_path || '';
+      document.getElementById('srv-dbtype').value = s.db_type || 'postgres';
       document.getElementById('srv-stanza').value = s.stanza || '';
       document.getElementById('srv-env').value = s.env || 'UAT';
       document.getElementById('srv-pgsvc').value = s.pg_service || 'postgresql@16-main';
